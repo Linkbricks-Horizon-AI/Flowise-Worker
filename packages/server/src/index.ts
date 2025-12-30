@@ -90,6 +90,7 @@ export class App {
     queueManager: QueueManager
     redisSubscriber: RedisEventSubscriber
     usageCacheManager: UsageCacheManager
+    sessionStore: any
 
     constructor() {
         this.app = express()
@@ -296,8 +297,7 @@ export class App {
                             activeOrganizationProductId: productId,
                             isOrganizationAdmin: true,
                             activeWorkspaceId: apiKeyWorkSpaceId!,
-                            activeWorkspace: workspace.name,
-                            isApiKeyValidated: true
+                            activeWorkspace: workspace.name
                         }
                         next()
                     }

@@ -1235,7 +1235,8 @@ const executeNode = async ({
                         index: i,
                         value: item,
                         isFirst: i === 0,
-                        isLast: i === results.input.iterationInput.length - 1
+                        isLast: i === results.input.iterationInput.length - 1,
+                        sessionId: sessionId
                     }
 
                     try {
@@ -1503,7 +1504,7 @@ export const executeAgentFlow = async ({
     const uploads = incomingInput.uploads
     const userMessageDateTime = new Date()
     const chatflowid = chatflow.id
-    const sessionId = overrideConfig.sessionId || chatId
+    const sessionId = iterationContext?.sessionId || overrideConfig.sessionId || chatId
     const humanInput: IHumanInput | undefined = incomingInput.humanInput
 
     // Validate history schema if provided
@@ -1655,7 +1656,8 @@ export const executeAgentFlow = async ({
     }
 
     // If it is human input, find the last checkpoint and resume
-    if (humanInput) {
+    // Skip human input resumption for recursive iteration calls - they should start fresh
+    if (humanInput && !(isRecursive && iterationContext)) {
         if (!previousExecution) {
             throw new Error(`No previous execution found for session ${sessionId}`)
         }
@@ -1766,7 +1768,7 @@ export const executeAgentFlow = async ({
         })
 
         if (parentExecution) {
-            logger.debug(`   📝 Using parent execution ID: ${parentExecutionId} for recursive call`)
+            logger.debug(`   📝 Using parent execution ID: ${parentExecutionId} for recursive call (iteration: ${!!iterationContext})`)
             newExecution = parentExecution
         } else {
             console.warn(`   ⚠️ Parent execution ID ${parentExecutionId} not found, will create new execution`)
@@ -1860,6 +1862,11 @@ export const executeAgentFlow = async ({
 
     let iterations = 0
     let currentHumanInput = humanInput
+
+    // For iteration calls, clear human input since they should start fresh
+    if (isRecursive && iterationContext && humanInput) {
+        currentHumanInput = undefined
+    }
 
     let analyticHandlers: AnalyticHandler | undefined
     let parentTraceIds: ICommonObject | undefined
@@ -2115,7 +2122,62 @@ export const executeAgentFlow = async ({
 
     // check if last agentFlowExecutedData.data.output contains the key "content"
     const lastNodeOutput = agentFlowExecutedData[agentFlowExecutedData.length - 1].data?.output as ICommonObject | undefined
-    const content = (lastNodeOutput?.content as string) ?? ' '
+    let content = (lastNodeOutput?.content as string) ?? ' '
+
+    /* Check for post-processing settings */
+    let chatflowConfig: ICommonObject = {}
+    try {
+        if (chatflow.chatbotConfig) {
+            chatflowConfig = typeof chatflow.chatbotConfig === 'string' ? JSON.parse(chatflow.chatbotConfig) : chatflow.chatbotConfig
+        }
+    } catch (e) {
+        logger.error('[server]: Error parsing chatflow config:', e)
+    }
+
+    if (chatflowConfig?.postProcessing?.enabled === true && content) {
+        try {
+            const postProcessingFunction = JSON.parse(chatflowConfig?.postProcessing?.customFunction)
+            const nodeInstanceFilePath = componentNodes['customFunctionAgentflow'].filePath as string
+            const nodeModule = await import(nodeInstanceFilePath)
+            //set the outputs.output to EndingNode to prevent json escaping of content...
+            const nodeData = {
+                inputs: { customFunctionJavascriptFunction: postProcessingFunction }
+            }
+            const runtimeChatHistory = agentflowRuntime.chatHistory || []
+            const chatHistory = [...pastChatHistory, ...runtimeChatHistory]
+            const options: ICommonObject = {
+                chatflowid: chatflow.id,
+                sessionId,
+                chatId,
+                input: question || form,
+                postProcessing: {
+                    rawOutput: content,
+                    chatHistory: cloneDeep(chatHistory),
+                    sourceDocuments: lastNodeOutput?.sourceDocuments ? cloneDeep(lastNodeOutput.sourceDocuments) : undefined,
+                    usedTools: lastNodeOutput?.usedTools ? cloneDeep(lastNodeOutput.usedTools) : undefined,
+                    artifacts: lastNodeOutput?.artifacts ? cloneDeep(lastNodeOutput.artifacts) : undefined,
+                    fileAnnotations: lastNodeOutput?.fileAnnotations ? cloneDeep(lastNodeOutput.fileAnnotations) : undefined
+                },
+                appDataSource,
+                databaseEntities,
+                workspaceId,
+                orgId,
+                logger
+            }
+            const customFuncNodeInstance = new nodeModule.nodeClass()
+            const customFunctionResponse = await customFuncNodeInstance.run(nodeData, question || form, options)
+            const moderatedResponse = customFunctionResponse.output.content
+            if (typeof moderatedResponse === 'string') {
+                content = moderatedResponse
+            } else if (typeof moderatedResponse === 'object') {
+                content = '```json\n' + JSON.stringify(moderatedResponse, null, 2) + '\n```'
+            } else {
+                content = moderatedResponse
+            }
+        } catch (e) {
+            logger.error('[server]: Post Processing Error:', e)
+        }
+    }
 
     // remove credentialId from agentFlowExecutedData
     agentFlowExecutedData = agentFlowExecutedData.map((data) => _removeCredentialId(data))
