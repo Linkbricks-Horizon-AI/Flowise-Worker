@@ -36,6 +36,9 @@
     "lint-staged": {
         "*.{js,jsx,ts,tsx,json,md}": "eslint --fix"
     },
+    "dependencies": {
+        "replicate": "^0.31.1"
+    },    
     "devDependencies": {
         "@babel/preset-env": "^7.19.4",
         "@babel/preset-typescript": "7.18.6",
