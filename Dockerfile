@@ -42,5 +42,5 @@ USER node
 
 EXPOSE 3000
 
-CMD [ "pnpm", "run", "start-worker" ]
+CMD [ "pnpm", "start" ]
 
