@@ -35,6 +35,7 @@ import { Organization } from './enterprise/database/entities/organization.entity
 import { GeneralRole, Role } from './enterprise/database/entities/role.entity'
 import { migrateApiKeysFromJsonToDb } from './utils/apiKey'
 import { ExpressAdapter } from '@bull-board/express'
+
 import type { NextFunction } from 'express'
 
 function queuesBasicAuth(req: Request, res: Response, next: NextFunction) {
@@ -51,7 +52,6 @@ function queuesBasicAuth(req: Request, res: Response, next: NextFunction) {
   res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
   return res.sendStatus(401)
 }
-
 
 declare global {
     namespace Express {
