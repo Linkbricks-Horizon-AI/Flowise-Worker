@@ -36,6 +36,23 @@ import { GeneralRole, Role } from './enterprise/database/entities/role.entity'
 import { migrateApiKeysFromJsonToDb } from './utils/apiKey'
 import { ExpressAdapter } from '@bull-board/express'
 
+import type { NextFunction } from 'express'
+
+function queuesBasicAuth(req: Request, res: Response, next: NextFunction) {
+  const user = process.env.FLOWISE_USERNAME || ''
+  const pass = process.env.FLOWISE_PASSWORD || ''
+  const hdr = req.headers.authorization || ''
+  if (!user || !pass) return res.status(403).send('Auth not configured')
+  if (!hdr.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
+    return res.sendStatus(401)
+  }
+  const [u, p] = Buffer.from(hdr.split(' ')[1], 'base64').toString().split(':')
+  if (u === user && p === pass) return next()
+  res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
+  return res.sendStatus(401)
+}
+
 declare global {
     namespace Express {
         interface User extends LoggedInUser {}
@@ -73,6 +90,7 @@ export class App {
     queueManager: QueueManager
     redisSubscriber: RedisEventSubscriber
     usageCacheManager: UsageCacheManager
+    sessionStore: any
 
     constructor() {
         this.app = express()
@@ -279,8 +297,7 @@ export class App {
                             activeOrganizationProductId: productId,
                             isOrganizationAdmin: true,
                             activeWorkspaceId: apiKeyWorkSpaceId!,
-                            activeWorkspace: workspace.name,
-                            isApiKeyValidated: true
+                            activeWorkspace: workspace.name
                         }
                         next()
                     }
@@ -331,7 +348,7 @@ export class App {
         })
 
         if (process.env.MODE === MODE.QUEUE && process.env.ENABLE_BULLMQ_DASHBOARD === 'true' && !this.identityManager.isCloud()) {
-            this.app.use('/admin/queues', this.queueManager.getBullBoardRouter())
+            this.app.use('/admin/queues', queuesBasicAuth, this.queueManager.getBullBoardRouter())
         }
 
         // ----------------------------------------
