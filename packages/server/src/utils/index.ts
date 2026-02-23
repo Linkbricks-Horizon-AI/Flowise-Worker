@@ -1054,7 +1054,7 @@ export const resolveVariables = async (
                     )
                     resolvedInstances.push(resolvedInstance)
                 }
-                paramsObj[key] = resolvedInstances
+                paramsObj[key] = resolvedInstances.filter((instance) => instance != null)
             } else {
                 const isAcceptVariable = reactFlowNodeData.inputParams.find((param) => param.name === key)?.acceptVariable ?? false
                 const resolvedInstance = await getVariableValue(
@@ -1189,10 +1189,7 @@ export const replaceInputsWithConfig = (
                     continue
                 }
             } else {
-                // Skip if it is an override "files" input, such as pdfFile, txtFile, etc
-                if (typeof overrideConfig[config] === 'string' && overrideConfig[config].includes('FILE-STORAGE::')) {
-                    // pass
-                } else if (!isParameterEnabled(flowNodeData.label, config)) {
+                if (!isParameterEnabled(flowNodeData.label, config)) {
                     // Only proceed if the parameter is enabled
                     continue
                 }

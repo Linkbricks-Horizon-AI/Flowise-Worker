@@ -19,7 +19,7 @@ class CustomTool_Tools implements INode {
     constructor() {
         this.label = 'Custom Tool'
         this.name = 'customTool'
-        this.version = 3.0
+        this.version = 3.1
         this.type = 'CustomTool'
         this.icon = 'customtool.svg'
         this.category = 'Tools'
@@ -36,6 +36,14 @@ class CustomTool_Tools implements INode {
                 name: 'returnDirect',
                 description: 'Return the output of the tool directly to the user',
                 type: 'boolean',
+                optional: true
+            },
+            {
+                label: 'Tool Enabled',
+                name: 'toolEnabled',
+                description: 'When disabled, this tool will not be available to the agent even if connected in the workflow',
+                type: 'boolean',
+                default: true,
                 optional: true
             },
             {
@@ -94,6 +102,13 @@ class CustomTool_Tools implements INode {
     }
 
     async init(nodeData: INodeData, _: string, options: ICommonObject): Promise<any> {
+        const toolEnabled = nodeData.inputs?.toolEnabled
+        console.log(`[TOOL_DEBUG] nodeId=${nodeData.id} toolEnabled=${toolEnabled} (type=${typeof toolEnabled}) selectedTool=${nodeData.inputs?.selectedTool}`)
+        if (toolEnabled === false || toolEnabled === 'false') {
+            console.log(`[TOOL_DEBUG] RETURNING NULL for nodeId=${nodeData.id}`)
+            return null
+        }
+
         const selectedToolId = nodeData.inputs?.selectedTool as string
         const customToolFunc = nodeData.inputs?.customToolFunc as string
         const customToolName = nodeData.inputs?.customToolName as string
