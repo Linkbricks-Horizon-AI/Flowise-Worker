@@ -1054,7 +1054,7 @@ export const resolveVariables = async (
                     )
                     resolvedInstances.push(resolvedInstance)
                 }
-                paramsObj[key] = resolvedInstances
+                paramsObj[key] = resolvedInstances.filter((instance) => instance != null)
             } else {
                 const isAcceptVariable = reactFlowNodeData.inputParams.find((param) => param.name === key)?.acceptVariable ?? false
                 const resolvedInstance = await getVariableValue(
