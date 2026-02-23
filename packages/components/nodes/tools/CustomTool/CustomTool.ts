@@ -103,7 +103,9 @@ class CustomTool_Tools implements INode {
 
     async init(nodeData: INodeData, _: string, options: ICommonObject): Promise<any> {
         const toolEnabled = nodeData.inputs?.toolEnabled
+        console.log(`[TOOL_DEBUG] nodeId=${nodeData.id} toolEnabled=${toolEnabled} (type=${typeof toolEnabled}) selectedTool=${nodeData.inputs?.selectedTool}`)
         if (toolEnabled === false || toolEnabled === 'false') {
+            console.log(`[TOOL_DEBUG] RETURNING NULL for nodeId=${nodeData.id}`)
             return null
         }
 
