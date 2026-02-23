@@ -19,7 +19,7 @@ class CustomTool_Tools implements INode {
     constructor() {
         this.label = 'Custom Tool'
         this.name = 'customTool'
-        this.version = 3.0
+        this.version = 3.1
         this.type = 'CustomTool'
         this.icon = 'customtool.svg'
         this.category = 'Tools'
