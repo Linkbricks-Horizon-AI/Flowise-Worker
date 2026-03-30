@@ -14,6 +14,7 @@ import { Organization } from './enterprise/database/entities/organization.entity
 import { Workspace } from './enterprise/database/entities/workspace.entity'
 import { LoggedInUser } from './enterprise/Interface.Enterprise'
 import { initializeJwtCookieMiddleware, verifyToken, verifyTokenForBullMQDashboard } from './enterprise/middleware/passport'
+import { initAuthSecrets } from './enterprise/utils/authSecrets'
 import { IdentityManager } from './IdentityManager'
 import { MODE, Platform } from './Interface'
 import { IMetricsProvider } from './Interface.Metrics'
@@ -121,6 +122,10 @@ export class App {
             await getEncryptionKey()
             logger.info('🔑 [server]: Encryption key initialized successfully')
 
+            // Initialize auth secrets (env → AWS Secrets Manager → filesystem)
+            await initAuthSecrets()
+            logger.info('🔐 [server]: Auth initialized successfully')
+
             // Initialize Rate Limit
             this.rateLimiterManager = RateLimiterManager.getInstance()
             await this.rateLimiterManager.initializeRateLimiters(await getDataSource().getRepository(ChatFlow).find())
@@ -216,11 +221,6 @@ export class App {
 
         // Add the sanitizeMiddleware to guard against XSS
         this.app.use(sanitizeMiddleware)
-
-        this.app.use((req, res, next) => {
-            res.header('Access-Control-Allow-Credentials', 'true') // Allow credentials (cookies, etc.)
-            if (next) next()
-        })
 
         const denylistURLs = process.env.DENYLIST_URLS ? process.env.DENYLIST_URLS.split(',') : []
         const whitelistURLs = WHITELIST_URLS.filter((url) => !denylistURLs.includes(url))

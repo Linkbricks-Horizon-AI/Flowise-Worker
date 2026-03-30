@@ -1,6 +1,6 @@
 import { BaseLanguageModel } from '@langchain/core/language_models/base'
-import { AgentExecutor } from 'langchain/agents'
-import { LLMChain } from 'langchain/chains'
+import { AgentExecutor } from '@langchain/classic/agents'
+import { LLMChain } from '@langchain/classic/chains'
 import { ConsoleCallbackHandler, CustomChainHandler, additionalCallbacks } from '../../../src/handler'
 import { ICommonObject, INode, INodeData, INodeParams, IServerSideEventStreamer, PromptTemplate } from '../../../src/Interface'
 import { getBaseClasses } from '../../../src/utils'
@@ -144,6 +144,14 @@ class CSV_Agents implements INode {
         // For example using titanic.csv: {'PassengerId': 'int64', 'Survived': 'int64', 'Pclass': 'int64', 'Name': 'object', 'Sex': 'object', 'Age': 'float64', 'SibSp': 'int64', 'Parch': 'int64', 'Ticket': 'object', 'Fare': 'float64', 'Cabin': 'object', 'Embarked': 'object'}
         let dataframeColDict = ''
         let customReadCSVFunc = _customReadCSV ? _customReadCSV : 'read_csv(csv_data)'
+        const csvReadValidation = validatePythonCodeForDataFrame(customReadCSVFunc)
+        if (!csvReadValidation.valid) {
+            throw new Error(
+                `Custom read_csv code was rejected for security reasons (${
+                    csvReadValidation.reason ?? 'unsafe construct'
+                }). Please use only safe pandas read_csv operations.`
+            )
+        }
         try {
             const code = `import pandas as pd
 import base64
@@ -196,7 +204,7 @@ json.dumps(my_dict)`
                 )
             }
             try {
-                const code = `import pandas as pd\n${pythonCode}`
+                const code = `import pandas as pd\nimport numpy as np\n${pythonCode}`
                 // TODO: get print console output
                 finalResult = await pyodide.runPythonAsync(code)
             } catch (error) {
