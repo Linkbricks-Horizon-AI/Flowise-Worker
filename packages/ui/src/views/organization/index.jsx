@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { z } from 'zod'
+import { z } from 'zod/v3'
 
 // material-ui
 import { Alert, Box, Button, Chip, Divider, Icon, List, ListItemText, Stack, TextField, Typography } from '@mui/material'
@@ -104,7 +104,7 @@ const OrganizationSetupPage = () => {
     const getBasicAuthApi = useApi(accountApi.getBasicAuth)
     const navigate = useNavigate()
 
-    const getDefaultProvidersApi = useApi(loginMethodApi.getLoginMethods)
+    const getDefaultProvidersApi = useApi(loginMethodApi.getDefaultLoginMethods)
     const [configuredSsoProviders, setConfiguredSsoProviders] = useState([])
 
     const register = async (event) => {

@@ -12,6 +12,7 @@ import { getPageAndLimitParams } from '../../utils/pagination'
 import { WorkspaceUserErrorMessage, WorkspaceUserService } from '../../enterprise/services/workspace-user.service'
 import { QueryRunner } from 'typeorm'
 import { GeneralErrorMessage } from '../../utils/constants'
+import { sanitizeFlowDataForPublicEndpoint } from '../../utils/sanitizeFlowData'
 
 const checkIfChatflowIsValidForStreaming = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -98,7 +99,7 @@ const getChatflowByApiKey = async (req: Request, res: Response, next: NextFuncti
         if (!apikey) {
             return res.status(401).send('Unauthorized')
         }
-        const apiResponse = await chatflowsService.getChatflowByApiKey(apikey.id, req.query.keyonly)
+        const apiResponse = await chatflowsService.getChatflowByApiKey(apikey.id, apikey.workspaceId, req.query.keyonly)
         return res.json(apiResponse)
     } catch (error) {
         next(error)
@@ -181,7 +182,7 @@ const updateChatflow = async (req: Request, res: Response, next: NextFunction) =
         }
         const chatflow = await chatflowsService.getChatflowById(req.params.id, workspaceId)
         if (!chatflow) {
-            return res.status(404).send(`Chatflow ${req.params.id} not found`)
+            return res.status(404).send('Chatflow not found')
         }
         const orgId = req.user?.activeOrganizationId
         if (!orgId) {
@@ -217,7 +218,8 @@ const getSinglePublicChatflow = async (req: Request, res: Response, next: NextFu
         }
         const chatflow = await chatflowsService.getChatflowById(req.params.id)
         if (!chatflow) return res.status(StatusCodes.NOT_FOUND).json({ message: 'Chatflow not found' })
-        if (chatflow.isPublic) return res.status(StatusCodes.OK).json(chatflow)
+        if (chatflow.isPublic)
+            return res.status(StatusCodes.OK).json({ ...chatflow, flowData: sanitizeFlowDataForPublicEndpoint(chatflow.flowData) })
         if (!req.user) return res.status(StatusCodes.UNAUTHORIZED).json({ message: GeneralErrorMessage.UNAUTHORIZED })
         queryRunner = getRunningExpressApp().AppDataSource.createQueryRunner()
         const workspaceUserService = new WorkspaceUserService()
