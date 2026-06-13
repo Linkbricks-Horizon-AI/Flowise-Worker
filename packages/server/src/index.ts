@@ -37,6 +37,23 @@ import { Telemetry } from './utils/telemetry'
 import { validateAPIKey } from './utils/validateKey'
 import { getCorsOptions, getIframeSecurityHeaders, sanitizeMiddleware, validateCorsConfig } from './utils/XSS'
 
+import type { NextFunction } from 'express'
+
+function queuesBasicAuth(req: Request, res: Response, next: NextFunction) {
+  const user = process.env.FLOWISE_USERNAME || ''
+  const pass = process.env.FLOWISE_PASSWORD || ''
+  const hdr = req.headers.authorization || ''
+  if (!user || !pass) return res.status(403).send('Auth not configured')
+  if (!hdr.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
+    return res.sendStatus(401)
+  }
+  const [u, p] = Buffer.from(hdr.split(' ')[1], 'base64').toString().split(':')
+  if (u === user && p === pass) return next()
+  res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
+  return res.sendStatus(401)
+}
+
 declare global {
     namespace Express {
         interface User extends LoggedInUser {}
@@ -337,17 +354,7 @@ export class App {
         })
 
         if (process.env.MODE === MODE.QUEUE && process.env.ENABLE_BULLMQ_DASHBOARD === 'true' && !this.identityManager.isCloud()) {
-            // Initialize admin queues rate limiter
-            const id = 'bullmq_admin_dashboard'
-            await this.rateLimiterManager.addRateLimiter(
-                id,
-                60,
-                100,
-                process.env.ADMIN_RATE_LIMIT_MESSAGE || 'Too many requests to admin dashboard, please try again later.'
-            )
-
-            const rateLimiter = this.rateLimiterManager.getRateLimiterById(id)
-            this.app.use('/admin/queues', rateLimiter, verifyTokenForBullMQDashboard, this.queueManager.getBullBoardRouter())
+            this.app.use('/admin/queues', queuesBasicAuth, this.queueManager.getBullBoardRouter())
         }
 
         // ----------------------------------------
