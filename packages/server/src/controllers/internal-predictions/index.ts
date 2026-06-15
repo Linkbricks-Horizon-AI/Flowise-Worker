@@ -6,6 +6,8 @@ import { MODE } from '../../Interface'
 import chatflowService from '../../services/chatflows'
 import { utilBuildChatflow } from '../../utils/buildChatflow'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
+import chatMessagesService from '../../services/chat-messages'
+import logger from '../../utils/logger'
 
 // Send input message and get prediction result (Internal)
 const createInternalPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -37,6 +39,15 @@ const createAndStreamInternalPrediction = async (req: Request, res: Response, ne
 
     try {
         sseStreamer.addClient(chatId, res)
+        // If the client disconnects before the stream finishes, abort the in-flight job so the
+        // worker stops instead of running to completion. Same abort path as an explicit user abort;
+        // the writableEnded guard means a normal completion never triggers an abort.
+        res.on('close', () => {
+            if (res.writableEnded || !chatId) return
+            chatMessagesService.abortChatMessage(chatId, req.params.id).catch((err) => {
+                logger.warn(`[server]: abort on client disconnect failed for ${chatId}: ${getErrorMessage(err)}`)
+            })
+        })
         res.setHeader('Content-Type', 'text/event-stream')
         res.setHeader('Cache-Control', 'no-cache')
         res.setHeader('Connection', 'keep-alive')

@@ -9,6 +9,7 @@ import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 import { v4 as uuidv4 } from 'uuid'
 import { getErrorMessage } from '../../errors/utils'
 import { MODE } from '../../Interface'
+import chatMessagesService from '../../services/chat-messages'
 
 // Send input message and get prediction result (External)
 const createPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -67,6 +68,17 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                 const isQueueMode = process.env.MODE === MODE.QUEUE
                 try {
                     sseStreamer.addExternalClient(chatId, res)
+                    // If the API client disconnects before the stream finishes, abort the in-flight
+                    // job so the worker stops instead of running to completion (wasted compute/LLM
+                    // spend) and this request stops awaiting. Reuses the exact same path as an
+                    // explicit user abort. The writableEnded guard means a normal completion — which
+                    // also emits 'close' after res.end() in the finally below — never triggers an abort.
+                    res.on('close', () => {
+                        if (res.writableEnded || !chatId) return
+                        chatMessagesService.abortChatMessage(chatId, req.params.id).catch((err) => {
+                            logger.warn(`[server]: abort on client disconnect failed for ${chatId}: ${getErrorMessage(err)}`)
+                        })
+                    })
                     res.setHeader('Content-Type', 'text/event-stream')
                     res.setHeader('Cache-Control', 'no-cache')
                     res.setHeader('Connection', 'keep-alive')

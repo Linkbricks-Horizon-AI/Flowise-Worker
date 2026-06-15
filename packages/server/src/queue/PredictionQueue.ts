@@ -97,13 +97,22 @@ export class PredictionQueue extends BaseQueue {
             })
         }
 
+        let abortControllerId: string | undefined
         if (this.abortControllerPool) {
-            const abortControllerId = `${data.chatflow.id}_${data.chatId}`
+            abortControllerId = `${data.chatflow.id}_${data.chatId}`
             const signal = new AbortController()
             this.abortControllerPool.add(abortControllerId, signal)
             data.signal = signal
         }
 
-        return await executeFlow(data)
+        try {
+            return await executeFlow(data)
+        } finally {
+            // Release the AbortController for this job on success, error, or abort. Without this the
+            // long-lived worker accumulates one entry per completed job (abort() only fires on an
+            // explicit user abort). remove() is idempotent, so this is safe even if abort() already
+            // removed it, and it never alters the returned value or a thrown error.
+            if (abortControllerId) this.abortControllerPool.remove(abortControllerId)
+        }
     }
 }
