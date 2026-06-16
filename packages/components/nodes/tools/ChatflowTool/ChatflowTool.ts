@@ -376,7 +376,7 @@ class ChatflowTool extends StructuredTool {
 
         const code = `
 const fetch = require('node-fetch');
-const url = "${this.baseURL}/api/v1/prediction/${this.chatflowid}";
+const url = $apiURL;
 
 const body = $callBody;
 
@@ -395,7 +395,8 @@ try {
         // Create additional sandbox variables
         const additionalSandbox: ICommonObject = {
             $callOptions: options,
-            $callBody: body
+            $callBody: body,
+            $apiURL: `${this.baseURL}/api/v1/prediction/${this.chatflowid}`
         }
 
         const sandbox = createCodeExecutionSandbox('', [], {}, additionalSandbox)
