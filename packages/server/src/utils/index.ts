@@ -1266,7 +1266,13 @@ export const replaceInputsWithConfig = (
 
             let paramValue = inputsObj[config]
             const overrideConfigValue = overrideConfig[config]
-            if (overrideConfigValue) {
+            // Apply any explicitly-provided override value, including falsy-but-defined ones
+            // (e.g. boolean false to disable a tool via `toolEnabled`, number 0, empty string).
+            // A plain truthy check here would silently drop `false`/`0`/`''` and keep the node
+            // default. `null`/`undefined` still mean "no override". Arrays and truthy objects are
+            // already handled by earlier branches (and `continue`), so this block only ever sees
+            // primitives here.
+            if (overrideConfigValue !== undefined && overrideConfigValue !== null) {
                 if (typeof overrideConfigValue === 'object') {
                     // Handle arrays specifically - concatenate instead of replace
                     if (Array.isArray(overrideConfigValue) && Array.isArray(paramValue)) {
