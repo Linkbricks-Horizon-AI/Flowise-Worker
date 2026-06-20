@@ -167,7 +167,7 @@ class XMLAgent_Agents implements INode {
                 inputTools = flatten(inputTools)
                 for (const tool of res.usedTools) {
                     const inputTool = inputTools.find((inputTool: Tool) => inputTool.name === tool.tool)
-                    if (inputTool && inputTool.returnDirect) {
+                    if (inputTool && inputTool.returnDirect && !(tool as any).streamed) {
                         if (sseStreamer) {
                             sseStreamer.streamTokenEvent(chatId, tool.toolOutput)
                         }

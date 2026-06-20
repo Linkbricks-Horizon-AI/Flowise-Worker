@@ -422,7 +422,14 @@ try {
      */
     private async streamChildPrediction(
         arg: any,
-        flowConfig: { sessionId?: string; chatId?: string; input?: string; sseStreamer?: IServerSideEventStreamer; streamed?: boolean },
+        flowConfig: {
+            sessionId?: string
+            chatId?: string
+            input?: string
+            sseStreamer?: IServerSideEventStreamer
+            streamed?: boolean
+            usedTools?: any[]
+        },
         parentSseStreamer: IServerSideEventStreamer,
         parentChatId: string
     ): Promise<string | null> {
@@ -459,6 +466,9 @@ try {
 
         let accumulated = ''
         let tokenCount = 0
+        // The child chatflow's own tool usage, captured from its SSE `usedTools` frame and surfaced to
+        // the caller via flowConfig so the parent agent can merge it into its own usedTools.
+        let childUsedTools: any[] = []
 
         try {
             // Reuse secureFetch (the same SSRF deny-list + pinned agent the blocking sandbox path
@@ -470,6 +480,8 @@ try {
             // and let the caller emit it once (existing behavior). The child still ran exactly once.
             if (!contentType.includes('text/event-stream')) {
                 const json: any = await response.json().catch(() => null)
+                // Surface a non-stream-valid child's own tool usage too (single JSON payload path).
+                if (json && Array.isArray(json.usedTools) && json.usedTools.length) flowConfig.usedTools = json.usedTools
                 if (json && typeof json.text === 'string') return json.text
                 if (typeof json === 'string') return json
                 return null
@@ -510,6 +522,19 @@ try {
                             tokenCount += 1
                             // Mark on the call-scoped flowConfig so the agent skips the bulk re-emit.
                             flowConfig.streamed = true
+                        }
+                        break
+                    case 'usedTools':
+                        // The child agent's own usedTools (a flat IUsedTool[]). Accumulate across the
+                        // child's iterations. The length guard ignores the empty `data:[]` frame an agent
+                        // emits when its usedTools is an empty (but truthy) array. Do NOT emit to the parent
+                        // streamer here — the parent ToolAgent.run emits the full merged array exactly once,
+                        // and the client REPLACEs usedTools on each event (a partial emit would be clobbered).
+                        // This frame always arrives before the terminal `end`, so the break-on-terminal loop
+                        // below still captures it.
+                        if (Array.isArray(parsed.data) && parsed.data.length) {
+                            childUsedTools = childUsedTools.concat(parsed.data)
+                            flowConfig.usedTools = childUsedTools
                         }
                         break
                     case 'end':

@@ -489,6 +489,17 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                                 // tools (e.g. ChatflowTool) that already forwarded their tokens.
                                 streamed: toolFlowConfig.streamed === true
                             })
+                            // Merge the child chatflow's own usedTools (captured by ChatflowTool.streamChildPrediction
+                            // onto the call-scoped flowConfig) into the parent's usedTools, so the child's custom tool
+                            // chips (e.g. search_main) surface in the parent response. This reuses the existing
+                            // usedTools -> streamUsedToolsEvent -> persistence path unchanged. streamed:true marks
+                            // them already-handled so no agent re-emits a child's internal toolOutput as answer
+                            // tokens if a parent tool happens to share a child tool's name.
+                            if (Array.isArray(toolFlowConfig.usedTools) && toolFlowConfig.usedTools.length) {
+                                for (const childTool of toolFlowConfig.usedTools) {
+                                    usedTools.push({ ...childTool, streamed: true })
+                                }
+                            }
                         } else {
                             observation = `${action.tool} is not a valid tool, try another one.`
                         }

@@ -155,7 +155,7 @@ class ConversationalAgent_Agents implements INode {
                 inputTools = flatten(inputTools)
                 for (const tool of res.usedTools) {
                     const inputTool = inputTools.find((inputTool: Tool) => inputTool.name === tool.tool)
-                    if (inputTool && inputTool.returnDirect && options.sseStreamer) {
+                    if (inputTool && inputTool.returnDirect && options.sseStreamer && !(tool as any).streamed) {
                         sseStreamer.streamTokenEvent(options.chatId, tool.toolOutput)
                     }
                 }
