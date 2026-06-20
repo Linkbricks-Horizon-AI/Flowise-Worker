@@ -23,7 +23,7 @@ import {
     StoppingMethod
 } from '@langchain/classic/agents'
 import { formatLogToString } from '@langchain/classic/agents/format_scratchpad/log'
-import { IUsedTool } from './Interface'
+import { IUsedTool, IServerSideEventStreamer } from './Interface'
 import { getErrorMessage } from './error'
 
 export const SOURCE_DOCUMENTS_PREFIX = '\n\n----FLOWISE_SOURCE_DOCUMENTS----\n\n'
@@ -280,6 +280,8 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
 
     isXML?: boolean
 
+    sseStreamer?: IServerSideEventStreamer
+
     /**
      * How to handle errors raised by the agent's output parser.
         Defaults to `False`, which raises the error.
@@ -334,13 +336,20 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
     }
 
     static fromAgentAndTools(
-        fields: AgentExecutorInput & { sessionId?: string; chatId?: string; input?: string; isXML?: boolean }
+        fields: AgentExecutorInput & {
+            sessionId?: string
+            chatId?: string
+            input?: string
+            isXML?: boolean
+            sseStreamer?: IServerSideEventStreamer
+        }
     ): AgentExecutor {
         const newInstance = new AgentExecutor(fields)
         if (fields.sessionId) newInstance.sessionId = fields.sessionId
         if (fields.chatId) newInstance.chatId = fields.chatId
         if (fields.input) newInstance.input = fields.input
         if (fields.isXML) newInstance.isXML = fields.isXML
+        if (fields.sseStreamer) newInstance.sseStreamer = fields.sseStreamer
         return newInstance
     }
 
@@ -437,16 +446,22 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                          * - flowConfig?: { sessionId?: string, chatId?: string, input?: string }
                          */
                         if (tool) {
+                            // Call-scoped config object (unique per invocation). Tools may set
+                            // flowConfig.streamed = true when they stream their output live, so the
+                            // bulk re-emit can be skipped — this is race-free even if the tool
+                            // instance is shared across concurrent calls.
+                            const toolFlowConfig: any = {
+                                sessionId: this.sessionId,
+                                chatId: this.chatId,
+                                input: this.input,
+                                sseStreamer: this.sseStreamer,
+                                state: inputs
+                            }
                             observation = await (tool as any).call(
                                 this.isXML && typeof action.toolInput === 'string' ? { input: action.toolInput } : action.toolInput,
                                 runManager?.getChild(),
                                 undefined,
-                                {
-                                    sessionId: this.sessionId,
-                                    chatId: this.chatId,
-                                    input: this.input,
-                                    state: inputs
-                                }
+                                toolFlowConfig
                             )
                             let toolOutput = observation
                             if (typeof toolOutput === 'string' && toolOutput.includes(SOURCE_DOCUMENTS_PREFIX)) {
@@ -468,7 +483,11 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                             usedTools.push({
                                 tool: tool.name,
                                 toolInput: toolInput ?? (action.toolInput as any),
-                                toolOutput
+                                toolOutput,
+                                // Whether the tool streamed its output live (set on the call-scoped
+                                // flowConfig). Lets agent nodes skip the bulk re-emit for returnDirect
+                                // tools (e.g. ChatflowTool) that already forwarded their tokens.
+                                streamed: toolFlowConfig.streamed === true
                             })
                         } else {
                             observation = `${action.tool} is not a valid tool, try another one.`
@@ -624,6 +643,7 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                             sessionId: this.sessionId,
                             chatId: this.chatId,
                             input: this.input,
+                            sseStreamer: this.sseStreamer,
                             state: inputs
                         }
                     )

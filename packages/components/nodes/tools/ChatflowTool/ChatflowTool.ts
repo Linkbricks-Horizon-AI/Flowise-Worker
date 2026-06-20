@@ -3,7 +3,15 @@ import { z } from 'zod/v3'
 import { RunnableConfig } from '@langchain/core/runnables'
 import { CallbackManagerForToolRun, Callbacks, CallbackManager, parseCallbackConfigArg } from '@langchain/core/callbacks/manager'
 import { StructuredTool } from '@langchain/core/tools'
-import { ICommonObject, IDatabaseEntity, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
+import {
+    ICommonObject,
+    IDatabaseEntity,
+    INode,
+    INodeData,
+    INodeOptionsValue,
+    INodeParams,
+    IServerSideEventStreamer
+} from '../../../src/Interface'
 import {
     getCredentialData,
     getCredentialParam,
@@ -11,6 +19,7 @@ import {
     createCodeExecutionSandbox,
     parseWithTypeConversion
 } from '../../../src/utils'
+import { secureFetch } from '../../../src/httpSecurity'
 import { isValidUUID, isValidURL } from '../../../src/validator'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -327,9 +336,23 @@ class ChatflowTool extends StructuredTool {
     protected async _call(
         arg: z.infer<typeof this.schema>,
         _?: CallbackManagerForToolRun,
-        flowConfig?: { sessionId?: string; chatId?: string; input?: string }
+        flowConfig?: { sessionId?: string; chatId?: string; input?: string; sseStreamer?: IServerSideEventStreamer }
     ): Promise<string> {
         const inputQuestion = this.input || arg.input
+
+        // True token streaming: only when this tool returns its output directly (returnDirect)
+        // AND the parent flow is itself streaming (parent SSE streamer present). Forwards the
+        // child chatflow's tokens to the parent stream in real time. Every other case falls
+        // through to the blocking path below, so existing behavior is byte-identical.
+        const parentSseStreamer = flowConfig?.sseStreamer
+        const parentChatId = flowConfig?.chatId
+        if (parentSseStreamer && parentChatId && flowConfig && this.returnDirect) {
+            const streamedText = await this.streamChildPrediction(arg, flowConfig, parentSseStreamer, parentChatId)
+            // null -> nothing streamed (child not stream-valid / zero tokens / pre-token error):
+            // fall through to the blocking request. Non-null (full or partial) -> tokens were
+            // forwarded live, return as-is (never re-run, which would duplicate the answer).
+            if (streamedText !== null) return streamedText
+        }
 
         const body = {
             question: inputQuestion,
@@ -386,6 +409,146 @@ try {
         }
 
         return response
+    }
+
+    /**
+     * Calls the child chatflow in streaming mode and forwards its answer tokens to the parent
+     * flow's SSE stream in real time. Returns the accumulated answer text (full, or partial on a
+     * mid-stream error), or null when nothing could be streamed (child not stream-valid, zero
+     * tokens, or a pre-token error) so the caller can fall back to the blocking request.
+     *
+     * All per-call state is local or carried on the call-scoped `flowConfig` object (unique per
+     * tool invocation), so concurrent invocations of the same tool instance never interfere.
+     */
+    private async streamChildPrediction(
+        arg: any,
+        flowConfig: { sessionId?: string; chatId?: string; input?: string; sseStreamer?: IServerSideEventStreamer; streamed?: boolean },
+        parentSseStreamer: IServerSideEventStreamer,
+        parentChatId: string
+    ): Promise<string | null> {
+        const inputQuestion = this.input || arg.input
+
+        // Use a DISTINCT transport chatId for the child SSE so it never overwrites the parent's
+        // SSE client entry (the streamer's client map is keyed by chatId). Memory continuity is
+        // preserved via overrideConfig.sessionId, which the child keys its memory off — not chatId.
+        const body = {
+            question: inputQuestion,
+            chatId: uuidv4(),
+            streaming: true,
+            overrideConfig: {
+                sessionId: this.startNewSession ? uuidv4() : flowConfig?.sessionId,
+                ...(this.overrideConfig ?? {}),
+                ...(arg.overrideConfig ?? {})
+            }
+        }
+
+        const url = `${this.baseURL}/api/v1/prediction/${this.chatflowid}`
+        const options: any = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'flowise-tool': 'true',
+                // Opt-in flag that lets an AgentFlow child stream when invoked as a tool. Regular
+                // chatflow children stream on `streaming: true` alone; this header is ignored by
+                // older servers, so a rolling deploy degrades gracefully to the blocking fallback.
+                'flowise-tool-stream': 'true',
+                ...this.headers
+            },
+            body: JSON.stringify(body)
+        }
+
+        let accumulated = ''
+        let tokenCount = 0
+
+        try {
+            // Reuse secureFetch (the same SSRF deny-list + pinned agent the blocking sandbox path
+            // uses via node-fetch), but consume the response body as a stream instead of buffering.
+            const response = await secureFetch(url, options)
+            const contentType = (response.headers?.get?.('content-type') || '').toLowerCase()
+
+            // Child is not stream-valid -> it answered with a single JSON payload. Return that text
+            // and let the caller emit it once (existing behavior). The child still ran exactly once.
+            if (!contentType.includes('text/event-stream')) {
+                const json: any = await response.json().catch(() => null)
+                if (json && typeof json.text === 'string') return json.text
+                if (typeof json === 'string') return json
+                return null
+            }
+
+            let started = false
+            const ensureStart = () => {
+                if (!started) {
+                    started = true
+                    // Idempotent on the parent (streamStartEvent guards on client.started).
+                    parentSseStreamer.streamStartEvent(parentChatId, '')
+                }
+            }
+
+            let buffer = ''
+            let terminal = false
+
+            const handleFrame = (rawFrame: string) => {
+                // Flowise frames are `message:\ndata:{json}\n\n`. The real event type lives in the
+                // JSON `event` field. Ignore the `message:` line, heartbeats (`:...`) and blanks.
+                const dataLine = rawFrame.split('\n').find((l) => l.startsWith('data:'))
+                if (!dataLine) return
+                let parsed: any
+                try {
+                    parsed = JSON.parse(dataLine.replace(/^data:\s?/, ''))
+                } catch (e) {
+                    return
+                }
+                switch (parsed?.event) {
+                    case 'start':
+                        ensureStart()
+                        break
+                    case 'token':
+                        if (typeof parsed.data === 'string' && parsed.data.length) {
+                            ensureStart()
+                            parentSseStreamer.streamTokenEvent(parentChatId, parsed.data)
+                            accumulated += parsed.data
+                            tokenCount += 1
+                            // Mark on the call-scoped flowConfig so the agent skips the bulk re-emit.
+                            flowConfig.streamed = true
+                        }
+                        break
+                    case 'end':
+                    case 'error':
+                    case 'abort':
+                        terminal = true
+                        break
+                    default:
+                        break
+                }
+            }
+
+            for await (const chunk of response.body as any) {
+                buffer += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+                let idx
+                while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                    const rawFrame = buffer.slice(0, idx)
+                    buffer = buffer.slice(idx + 2)
+                    handleFrame(rawFrame)
+                    if (terminal) break
+                }
+                if (terminal) break
+            }
+            // Flush a trailing frame that arrived without the blank-line terminator.
+            if (!terminal && buffer.trim().length) handleFrame(buffer)
+
+            // No tokens produced (e.g. an AgentFlow child whose streamer was not opted-in during a
+            // rolling deploy). Signal the caller to fall back to a blocking request so the answer is
+            // not lost. In steady state (both web + worker deployed) this path is not reached.
+            if (tokenCount === 0) return null
+
+            return accumulated
+        } catch (e) {
+            // Network/parse failure. If tokens were already forwarded, return the partial text —
+            // re-running via the blocking path would duplicate the answer and the child's memory
+            // writes. If nothing was forwarded yet, fall back to the blocking request.
+            if (tokenCount > 0) return accumulated
+            return null
+        }
     }
 }
 

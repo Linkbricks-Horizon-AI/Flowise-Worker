@@ -478,6 +478,10 @@ export interface IExecuteFlowParams extends IPredictionQueueAppServer {
     parentExecutionId?: string
     iterationContext?: ICommonObject
     isTool?: boolean
+    // Set when the request comes from ChatflowTool in streaming-forward mode (header
+    // 'flowise-tool-stream'). Allows an AgentFlow child to keep its SSE streamer so its tokens
+    // can be forwarded to the parent. Default/absent preserves the existing isTool behavior.
+    isToolStreaming?: boolean
     chatType?: ChatType
 }
 

@@ -317,6 +317,7 @@ export const executeFlow = async ({
     files,
     signal,
     isTool,
+    isToolStreaming,
     chatType,
     orgId,
     workspaceId,
@@ -500,6 +501,7 @@ export const executeFlow = async ({
             fileUploads,
             signal,
             isTool,
+            isToolStreaming,
             orgId,
             workspaceId,
             subscriptionId,
@@ -1010,6 +1012,7 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
     const files = (req.files as Express.Multer.File[]) || []
     const abortControllerId = `${chatflow.id}_${chatId}`
     const isTool = req.get('flowise-tool') === 'true'
+    const isToolStreaming = req.get('flowise-tool-stream') === 'true'
     const isEvaluation: boolean = req.headers['X-Flowise-Evaluation'] || req.body.evaluation
     let evaluationRunId = ''
     evaluationRunId = req.body.evaluationRunId
@@ -1075,6 +1078,7 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
             cachePool: appServer.cachePool,
             componentNodes: appServer.nodesPool.componentNodes,
             isTool, // used to disable streaming if incoming request its from ChatflowTool
+            isToolStreaming, // ChatflowTool streaming-forward mode: keep AgentFlow child streamer alive
             chatType,
             usageCacheManager: appServer.usageCacheManager,
             orgId,

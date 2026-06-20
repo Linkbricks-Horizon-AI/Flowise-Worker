@@ -183,7 +183,9 @@ class ToolAgent_Agents implements INode {
                 inputTools = flatten(inputTools).filter((t: any) => t != null)
                 for (const tool of res.usedTools) {
                     const inputTool = inputTools.find((inputTool: Tool) => inputTool.name === tool.tool)
-                    if (inputTool && inputTool.returnDirect && shouldStreamResponse) {
+                    // Skip the bulk emit when the tool already streamed its output live (e.g. ChatflowTool
+                    // forwarding a child chatflow's tokens) — otherwise the answer would be sent twice.
+                    if (inputTool && inputTool.returnDirect && shouldStreamResponse && !(tool as any).streamed) {
                         sseStreamer.streamTokenEvent(chatId, tool.toolOutput)
                     }
                 }
@@ -356,6 +358,10 @@ const prepareAgent = async (
         sessionId: flowObj?.sessionId,
         chatId: flowObj?.chatId,
         input: flowObj?.input,
+        // Pass the live parent SSE streamer so tools (e.g. ChatflowTool with returnDirect)
+        // can forward a child chatflow's tokens to the parent stream in real time. Only set
+        // when the parent flow is streaming (otherwise undefined -> tools use blocking path).
+        sseStreamer: options.sseStreamer,
         verbose: process.env.DEBUG === 'true' ? true : false,
         maxIterations: maxIterations ? parseFloat(maxIterations) : undefined
     })

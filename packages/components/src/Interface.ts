@@ -192,6 +192,10 @@ export interface IUsedTool {
     toolOutput: string | object
     sourceDocuments?: ICommonObject[]
     error?: string
+    // Set when the tool already streamed its output live to the client (e.g. ChatflowTool
+    // with returnDirect forwarding a child chatflow's tokens). Used to suppress the bulk
+    // post-hoc emit in agent nodes so the answer is not sent twice.
+    streamed?: boolean
 }
 
 export interface IMultiAgentNode {

@@ -1558,6 +1558,7 @@ export const executeAgentFlow = async ({
     parentExecutionId,
     iterationContext,
     isTool = false,
+    isToolStreaming = false,
     chatType,
     orgId,
     workspaceId,
@@ -1616,7 +1617,9 @@ export const executeAgentFlow = async ({
         }
     }
     // @ts-ignore
-    if (isTool) sseStreamer = undefined // If the request is from ChatflowTool, don't stream the response
+    // If the request is from ChatflowTool, don't stream the response — UNLESS it is ChatflowTool's
+    // streaming-forward mode (isToolStreaming), where the child's tokens are forwarded to the parent.
+    if (isTool && !isToolStreaming) sseStreamer = undefined
 
     /*** Get API Config ***/
     const { nodeOverrides, variableOverrides, apiOverrideStatus } = getAPIOverrideConfig(chatflow)
