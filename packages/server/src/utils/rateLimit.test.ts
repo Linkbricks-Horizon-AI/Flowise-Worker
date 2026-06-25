@@ -1,5 +1,12 @@
+const mockRateLimit = jest.fn((_opts: unknown) => (_req: unknown, _res: unknown, next: () => void) => next())
+jest.mock('express-rate-limit', () => ({
+    __esModule: true,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rateLimit: (opts: any) => mockRateLimit(opts)
+}))
+
 import { Request } from 'express'
-import { getRateLimiterKey } from './rateLimit'
+import { getRateLimiterKey, RateLimiterManager } from './rateLimit'
 
 const makeReq = (body: any, ip: string | undefined = '1.2.3.4'): Request =>
     ({ body, ip, socket: { remoteAddress: ip } } as unknown as Request)
@@ -35,5 +42,28 @@ describe('getRateLimiterKey', () => {
 
     it('falls back to "unknown" when neither ip nor remoteAddress is set', () => {
         expect(getRateLimiterKey({ body: {}, ip: undefined, socket: {} } as unknown as Request)).toBe('unknown')
+    })
+})
+
+describe('addRateLimiter keyGenerator wiring', () => {
+    beforeEach(() => mockRateLimit.mockClear())
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lastOptions = (): Record<string, unknown> =>
+        (mockRateLimit.mock.calls as any[][])[mockRateLimit.mock.calls.length - 1][0] as Record<string, unknown>
+
+    it('omits keyGenerator when bySessionId is false (IP-based, unchanged behavior)', async () => {
+        await RateLimiterManager.getInstance().addRateLimiter('cf-ip', 60, 5, 'msg', false)
+        expect(lastOptions()).not.toHaveProperty('keyGenerator')
+    })
+
+    it('omits keyGenerator when bySessionId is not passed (default)', async () => {
+        await RateLimiterManager.getInstance().addRateLimiter('cf-default', 60, 5, 'msg')
+        expect(lastOptions()).not.toHaveProperty('keyGenerator')
+    })
+
+    it('wires getRateLimiterKey when bySessionId is true', async () => {
+        await RateLimiterManager.getInstance().addRateLimiter('cf-session', 60, 5, 'msg', true)
+        expect(lastOptions().keyGenerator).toBe(getRateLimiterKey)
     })
 })
