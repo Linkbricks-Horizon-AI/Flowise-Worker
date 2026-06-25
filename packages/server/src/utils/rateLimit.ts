@@ -6,6 +6,22 @@ import { RedisStore } from 'rate-limit-redis'
 import Redis from 'ioredis'
 import { QueueEvents, QueueEventsListener, QueueEventsProducer } from 'bullmq'
 
+/**
+ * Build the rate-limit counter key for a request.
+ * Mirrors getMemorySessionId() external-API precedence so that "per session"
+ * limiting matches the conversation unit the engine actually uses.
+ * Falls back to client IP when no session identifier is present.
+ */
+export const getRateLimiterKey = (req: Request): string => {
+    const overrideSessionId = req.body?.overrideConfig?.sessionId
+    if (typeof overrideSessionId === 'string' && overrideSessionId.length > 0) return overrideSessionId
+
+    const chatId = req.body?.chatId
+    if (typeof chatId === 'string' && chatId.length > 0) return chatId
+
+    return req.ip || req.socket?.remoteAddress || 'unknown'
+}
+
 interface CustomListener extends QueueEventsListener {
     updateRateLimiter: (args: { limitDuration: number; limitMax: number; limitMsg: string; id: string }) => void
 }
