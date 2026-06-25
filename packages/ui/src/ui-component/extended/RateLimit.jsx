@@ -34,6 +34,7 @@ const RateLimit = ({ dialogProps, hideTitle = false }) => {
     const [limitMax, setLimitMax] = useState(apiConfig?.rateLimit?.limitMax ?? '')
     const [limitDuration, setLimitDuration] = useState(apiConfig?.rateLimit?.limitDuration ?? '')
     const [limitMsg, setLimitMsg] = useState(apiConfig?.rateLimit?.limitMsg ?? '')
+    const [bySessionId, setBySessionId] = useState(apiConfig?.rateLimit?.bySessionId ?? false)
 
     const formatObj = () => {
         let apiConfig = JSON.parse(dialogProps.chatflow.apiConfig)
@@ -52,7 +53,8 @@ const RateLimit = ({ dialogProps, hideTitle = false }) => {
                     ...obj,
                     limitMax,
                     limitDuration,
-                    limitMsg
+                    limitMsg,
+                    bySessionId
                 }
             }
         }
@@ -165,6 +167,11 @@ const RateLimit = ({ dialogProps, hideTitle = false }) => {
                     {textField(limitMax, 'limitMax', 'Message Limit per Duration', 'number', '5')}
                     {textField(limitDuration, 'limitDuration', 'Duration in Second', 'number', '60')}
                     {textField(limitMsg, 'limitMsg', 'Limit Message', 'string', 'You have reached the quota')}
+                    <SwitchInput
+                        label='Limit per Session ID (instead of IP address)'
+                        onChange={(value) => setBySessionId(value)}
+                        value={bySessionId}
+                    />
                 </Stack>
             )}
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', width: '100%', mt: 2 }}>
