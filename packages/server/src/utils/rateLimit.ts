@@ -23,7 +23,15 @@ export const getRateLimiterKey = (req: Request): string => {
 }
 
 interface CustomListener extends QueueEventsListener {
-    updateRateLimiter: (args: { limitDuration: number; limitMax: number; limitMsg: string; id: string }) => void
+    // NOTE: BullMQ serializes event payloads to strings over Redis streams,
+    // so bySessionId may arrive as a string at runtime; normalize on receive.
+    updateRateLimiter: (args: {
+        limitDuration: number
+        limitMax: number
+        limitMsg: string
+        id: string
+        bySessionId?: boolean
+    }) => void
 }
 
 const QUEUE_NAME = 'ratelimit'
@@ -107,9 +115,10 @@ export class RateLimiterManager {
         return RateLimiterManager.instance
     }
 
-    public async addRateLimiter(id: string, duration: number, limit: number, message: string): Promise<void> {
+    public async addRateLimiter(id: string, duration: number, limit: number, message: string, bySessionId = false): Promise<void> {
         const release = await this.rateLimiterMutex.acquire()
         try {
+            const keyGeneratorOpt = bySessionId ? { keyGenerator: getRateLimiterKey } : {}
             if (process.env.MODE === MODE.QUEUE) {
                 this.rateLimiters.set(
                     id,
@@ -119,6 +128,7 @@ export class RateLimiterManager {
                         standardHeaders: true,
                         legacyHeaders: false,
                         message,
+                        ...keyGeneratorOpt,
                         store: new RedisStore({
                             prefix: `rl:${id}`,
                             // @ts-expect-error - Known issue: the `call` function is not present in @types/ioredis
@@ -132,7 +142,8 @@ export class RateLimiterManager {
                     rateLimit({
                         windowMs: duration * 1000,
                         max: limit,
-                        message
+                        message,
+                        ...keyGeneratorOpt
                     })
                 )
             }
@@ -168,10 +179,11 @@ export class RateLimiterManager {
         if (!chatFlow.apiConfig) return
         const apiConfig = JSON.parse(chatFlow.apiConfig)
 
-        const rateLimit: { limitDuration: number; limitMax: number; limitMsg: string; status?: boolean } = apiConfig.rateLimit
+        const rateLimit: { limitDuration: number; limitMax: number; limitMsg: string; status?: boolean; bySessionId?: boolean } =
+            apiConfig.rateLimit
         if (!rateLimit) return
 
-        const { limitDuration, limitMax, limitMsg, status } = rateLimit
+        const { limitDuration, limitMax, limitMsg, status, bySessionId } = rateLimit
 
         if (!isInitialized && process.env.MODE === MODE.QUEUE && this.queueEventsProducer) {
             await this.queueEventsProducer.publishEvent({
@@ -179,13 +191,14 @@ export class RateLimiterManager {
                 limitDuration,
                 limitMax,
                 limitMsg,
-                id: chatFlow.id
+                id: chatFlow.id,
+                bySessionId: bySessionId ?? false
             })
         } else {
             if (status === false) {
                 this.removeRateLimiter(chatFlow.id)
             } else if (limitMax && limitDuration && limitMsg) {
-                await this.addRateLimiter(chatFlow.id, limitDuration, limitMax, limitMsg)
+                await this.addRateLimiter(chatFlow.id, limitDuration, limitMax, limitMsg, bySessionId ?? false)
             }
         }
     }
@@ -204,14 +217,17 @@ export class RateLimiterManager {
                     limitDuration,
                     limitMax,
                     limitMsg,
-                    id
+                    id,
+                    bySessionId
                 }: {
                     limitDuration: number
                     limitMax: number
                     limitMsg: string
                     id: string
+                    bySessionId?: boolean
                 }) => {
-                    await this.addRateLimiter(id, limitDuration, limitMax, limitMsg)
+                    // BullMQ delivers payload values as strings; normalize the boolean.
+                    await this.addRateLimiter(id, limitDuration, limitMax, limitMsg, String(bySessionId) === 'true')
                 }
             )
         }
