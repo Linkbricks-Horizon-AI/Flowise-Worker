@@ -9,6 +9,11 @@ const createProviderError = (message: string, status: number): Error => {
     return error
 }
 
+const parseAttempt = (attempt: string): { modelName: string; apiKey: string } => {
+    const separatorIndex = attempt.lastIndexOf(':')
+    return { modelName: attempt.slice(0, separatorIndex), apiKey: attempt.slice(separatorIndex + 1) }
+}
+
 class DeterministicChatOpenRouter extends ChatOpenRouter {
     readonly attempts: string[] = []
     mode: 'success' | 'generateFallback' | 'streamBeforeTokenFallback' | 'streamAfterTokenFailure' = 'generateFallback'
@@ -159,7 +164,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         const result = await model._generate([], {} as any)
 
         expect(result.generations[0].text).toBe('ok')
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-b'])
+        expect(model.attempts).toHaveLength(2)
+        const [first, second] = model.attempts.map(parseAttempt)
+        expect(second.modelName).not.toBe(first.modelName)
+        expect(second.apiKey).not.toBe(first.apiKey)
     })
 
     it('does not fall back to another model/key pair for request or configuration errors', async () => {
@@ -173,7 +181,7 @@ describe('ChatOpenRouter fallback candidates', () => {
 
         await expect(model._generate([], {} as any)).rejects.toThrow('first attempt failed')
 
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a'])
+        expect(model.attempts).toHaveLength(1)
     })
 
     it('falls back to another model/key pair for forbidden errors', async () => {
@@ -188,7 +196,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         const result = await model._generate([], {} as any)
 
         expect(result.generations[0].text).toBe('ok')
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-b'])
+        expect(model.attempts).toHaveLength(2)
+        const [first, second] = model.attempts.map(parseAttempt)
+        expect(second.modelName).not.toBe(first.modelName)
+        expect(second.apiKey).not.toBe(first.apiKey)
     })
 
     it('falls back for streaming failures before the first token', async () => {
@@ -206,7 +217,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         }
 
         expect(chunks).toEqual(['ok'])
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-a'])
+        expect(model.attempts).toHaveLength(2)
+        const [first, second] = model.attempts.map(parseAttempt)
+        expect(second.modelName).not.toBe(first.modelName)
+        expect(second.apiKey).toBe(first.apiKey)
     })
 
     it('falls back for streaming forbidden errors before the first token', async () => {
@@ -225,7 +239,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         }
 
         expect(chunks).toEqual(['ok'])
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-a'])
+        expect(model.attempts).toHaveLength(2)
+        const [first, second] = model.attempts.map(parseAttempt)
+        expect(second.modelName).not.toBe(first.modelName)
+        expect(second.apiKey).toBe(first.apiKey)
     })
 
     it('does not fall back for streaming request or configuration errors before the first token', async () => {
@@ -246,7 +263,7 @@ describe('ChatOpenRouter fallback candidates', () => {
         }).rejects.toThrow('stream failed before token')
 
         expect(chunks).toEqual([])
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a'])
+        expect(model.attempts).toHaveLength(1)
     })
 
     it('does not fall back for streaming failures after a token was yielded', async () => {
@@ -266,7 +283,7 @@ describe('ChatOpenRouter fallback candidates', () => {
         }).rejects.toThrow('stream failed after token')
 
         expect(chunks).toEqual(['ok'])
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a'])
+        expect(model.attempts).toHaveLength(1)
     })
 
     it('keeps the assigned primary attempt across calls within the same session', async () => {
@@ -290,32 +307,86 @@ describe('ChatOpenRouter fallback candidates', () => {
         await model._generate([], {} as any)
         await rebuiltModelForSameSession._generate([], {} as any)
 
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.4:key-a', 'openai/gpt-5.4:key-a'])
-        expect(rebuiltModelForSameSession.attempts).toEqual(['openai/gpt-5.4:key-a'])
+        expect(model.attempts).toHaveLength(3)
+        expect(new Set(model.attempts).size).toBe(1)
+        expect(rebuiltModelForSameSession.attempts).toEqual([model.attempts[0]])
     })
 
-    it('round robins the primary attempt when assigning new sessions', async () => {
-        const sessionA = new DeterministicChatOpenRouter('chatOpenRouter_0', {
+    it('pins each session to a hash-determined attempt that is identical in every process', async () => {
+        // Golden FNV-1a values: any change to the hash or key layout breaks cross-worker pinning
+        const expectedAssignments: Record<string, string> = {
+            'session-1': 'openai/gpt-5.5:key-a',
+            'session-2': 'openai/gpt-5.5:key-b',
+            'session-3': 'openai/gpt-5.4:key-a',
+            'session-4': 'openai/gpt-5.4:key-b'
+        }
+
+        for (const [sessionId, expectedAttempt] of Object.entries(expectedAssignments)) {
+            const model = new DeterministicChatOpenRouter('chatOpenRouter_0', {
+                modelName: 'openai/gpt-5.4, openai/gpt-5.5',
+                apiKey: 'key-a, key-b',
+                roundRobinScope: 'golden-scope',
+                roundRobinSessionId: sessionId
+            })
+            model.mode = 'success'
+
+            await model._generate([], {} as any)
+
+            expect(model.attempts).toEqual([expectedAttempt])
+        }
+    })
+
+    it('assigns the same attempt to a session regardless of arrival order across worker processes', async () => {
+        const loadFreshChatOpenRouter = (): typeof ChatOpenRouter => {
+            let fresh: typeof ChatOpenRouter | undefined
+            jest.isolateModules(() => {
+                fresh = require('./FlowiseChatOpenRouter').ChatOpenRouter
+            })
+            return fresh!
+        }
+        const runSession = async (WorkerChatOpenRouter: typeof ChatOpenRouter, sessionId: string): Promise<string> => {
+            const model = new WorkerChatOpenRouter('chatOpenRouter_0', {
+                modelName: 'openai/gpt-5.4, openai/gpt-5.5',
+                apiKey: 'key-a, key-b',
+                roundRobinScope: 'test-arrival-order',
+                roundRobinSessionId: sessionId
+            })
+            const deterministic = attachDeterministicAttemptModel(model)
+            await model._generate([], {} as any)
+            return deterministic.attempts[0]
+        }
+
+        const workerOne = loadFreshChatOpenRouter()
+        const workerOneSessionX = await runSession(workerOne, 'session-x')
+        const workerOneSessionY = await runSession(workerOne, 'session-y')
+
+        const workerTwo = loadFreshChatOpenRouter()
+        const workerTwoSessionY = await runSession(workerTwo, 'session-y')
+        const workerTwoSessionX = await runSession(workerTwo, 'session-x')
+
+        expect(workerTwoSessionX).toBe(workerOneSessionX)
+        expect(workerTwoSessionY).toBe(workerOneSessionY)
+    })
+
+    it('rotates attempts across calls when no session id is provided', async () => {
+        const model = new DeterministicChatOpenRouter('chatOpenRouter_0', {
             modelName: 'openai/gpt-5.4, openai/gpt-5.5',
             apiKey: 'key-a, key-b',
-            roundRobinScope: 'test-new-session-assignment',
-            roundRobinSessionId: 'session-a'
+            roundRobinScope: 'test-sessionless-rotation'
         })
-        const sessionB = new DeterministicChatOpenRouter('chatOpenRouter_0', {
-            modelName: 'openai/gpt-5.4, openai/gpt-5.5',
-            apiKey: 'key-a, key-b',
-            roundRobinScope: 'test-new-session-assignment',
-            roundRobinSessionId: 'session-b'
-        })
-        sessionA.mode = 'success'
-        sessionB.mode = 'success'
+        model.mode = 'success'
 
-        await sessionA._generate([], {} as any)
-        await sessionA._generate([], {} as any)
-        await sessionB._generate([], {} as any)
+        await model._generate([], {} as any)
+        await model._generate([], {} as any)
+        await model._generate([], {} as any)
+        await model._generate([], {} as any)
 
-        expect(sessionA.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.4:key-a'])
-        expect(sessionB.attempts).toEqual(['openai/gpt-5.4:key-b'])
+        expect(model.attempts).toEqual([
+            'openai/gpt-5.4:key-a',
+            'openai/gpt-5.4:key-b',
+            'openai/gpt-5.5:key-a',
+            'openai/gpt-5.5:key-b'
+        ])
     })
 
     it('tries remaining model/key pairs before failing when preferred fallbacks are exhausted', async () => {
@@ -330,7 +401,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         const result = await model._generate([], {} as any)
 
         expect(result.generations[0].text).toBe('ok')
-        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-b', 'openai/gpt-5.4:key-b'])
+        // Hash start index is 2 for this scope/session, so the rotated order is
+        // [5.5:a, 5.5:b, 5.4:a, 5.4:b]; after 5.5:a fails, the both-clean pick is 5.4:b,
+        // and full exhaustion falls through to the first untried attempt 5.5:b.
+        expect(model.attempts).toEqual(['openai/gpt-5.5:key-a', 'openai/gpt-5.4:key-b', 'openai/gpt-5.5:key-b'])
     })
 
     it('preserves ChatOpenRouter and accumulates default options when withConfig is chained', () => {
@@ -389,18 +463,15 @@ describe('ChatOpenRouter fallback candidates', () => {
     })
 
     it('preserves round-robin session assignment after bindTools', async () => {
-        const sessionA = new ChatOpenRouter('chatOpenRouter_0', {
-            modelName: 'openai/gpt-5.4, openai/gpt-5.5',
-            apiKey: 'key-a, key-b',
-            roundRobinScope: 'test-bind-tools-session-assignment',
-            roundRobinSessionId: 'session-a'
-        })
-        const sessionB = new ChatOpenRouter('chatOpenRouter_0', {
-            modelName: 'openai/gpt-5.4, openai/gpt-5.5',
-            apiKey: 'key-a, key-b',
-            roundRobinScope: 'test-bind-tools-session-assignment',
-            roundRobinSessionId: 'session-b'
-        })
+        const buildFixture = (sessionId: string) =>
+            new ChatOpenRouter('chatOpenRouter_0', {
+                modelName: 'openai/gpt-5.4, openai/gpt-5.5',
+                apiKey: 'key-a, key-b',
+                roundRobinScope: 'test-bind-tools-session-assignment',
+                roundRobinSessionId: sessionId
+            })
+        const sessionA = buildFixture('session-a')
+        const sessionB = buildFixture('session-b')
 
         const boundA = sessionA.bindTools([]) as ChatOpenRouter
         const boundB = sessionB.bindTools([]) as ChatOpenRouter
@@ -414,8 +485,14 @@ describe('ChatOpenRouter fallback candidates', () => {
         expect(boundA).toBeInstanceOf(ChatOpenRouter)
         expect(boundB).toBeInstanceOf(ChatOpenRouter)
         expect((boundA as any).defaultOptions.tools).toEqual([])
-        expect(deterministicA.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.4:key-a'])
-        expect(deterministicB.attempts).toEqual(['openai/gpt-5.4:key-b'])
+        expect(deterministicA.attempts).toHaveLength(2)
+        expect(new Set(deterministicA.attempts).size).toBe(1)
+        expect(deterministicB.attempts).toHaveLength(1)
+
+        const unboundSessionB = buildFixture('session-b')
+        const deterministicUnboundB = attachDeterministicAttemptModel(unboundSessionB)
+        await unboundSessionB._generate([], {} as any)
+        expect(deterministicB.attempts[0]).toBe(deterministicUnboundB.attempts[0])
     })
 
     it('falls back to another model/key pair after bindTools', async () => {
@@ -434,7 +511,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         const result = await bound._generate([], {} as any)
 
         expect(result.generations[0].text).toBe('ok')
-        expect(deterministic.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-b'])
+        expect(deterministic.attempts).toHaveLength(2)
+        const [first, second] = deterministic.attempts.map(parseAttempt)
+        expect(second.modelName).not.toBe(first.modelName)
+        expect(second.apiKey).not.toBe(first.apiKey)
     })
 
     it('preserves streaming round-robin after bindTools', async () => {
@@ -456,7 +536,10 @@ describe('ChatOpenRouter fallback candidates', () => {
         }
 
         expect(chunks).toEqual(['ok'])
-        expect(deterministic.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.5:key-a'])
+        expect(deterministic.attempts).toHaveLength(2)
+        const [first, second] = deterministic.attempts.map(parseAttempt)
+        expect(second.modelName).not.toBe(first.modelName)
+        expect(second.apiKey).toBe(first.apiKey)
     })
 
     it('keeps the ChatOpenRouter wrapper for structured output configuration', () => {

@@ -89,13 +89,16 @@ const fallbackConfigs: VoraRouter2FallbackConfig[] = [
     }
 ]
 
+let fixtureScopeCounter = 0
+
 describe('ChatVoraRouter2 provider fallbacks', () => {
     it('runs provider fallbacks by configured order after primary OpenRouter attempts fail', async () => {
         const model = new DeterministicChatVoraRouter2(
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -114,7 +117,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -131,7 +135,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -150,7 +155,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -169,7 +175,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -188,7 +195,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -211,7 +219,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -232,7 +241,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -248,7 +258,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -266,7 +277,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )
@@ -288,7 +300,8 @@ describe('ChatVoraRouter2 provider fallbacks', () => {
             'chatVoraRouter2_0',
             {
                 modelName: 'openrouter-a, openrouter-b',
-                apiKey: 'openrouter-key'
+                apiKey: 'openrouter-key',
+                roundRobinScope: `vora2-fixture-${fixtureScopeCounter++}`
             },
             fallbackConfigs
         )

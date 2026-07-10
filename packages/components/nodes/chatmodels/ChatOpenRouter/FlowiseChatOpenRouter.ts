@@ -24,11 +24,6 @@ type RoundRobinState = {
     lastUsedAt: number
 }
 
-type SessionAttemptState = {
-    attemptIndex: number
-    lastUsedAt: number
-}
-
 type ProviderErrorFacts = {
     statuses: number[]
     codes: string[]
@@ -40,7 +35,6 @@ type ProviderErrorFacts = {
 const ROUND_ROBIN_STATE_TTL_MS = 24 * 60 * 60 * 1000
 const ROUND_ROBIN_STATE_PRUNE_INTERVAL_MS = 60 * 60 * 1000
 const roundRobinAssignmentStates = new Map<string, RoundRobinState>()
-const roundRobinSessionStates = new Map<string, SessionAttemptState>()
 let lastRoundRobinStatePrune = 0
 const TRANSIENT_PROVIDER_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504, 529])
 const TRANSIENT_PROVIDER_ERROR_CODES = new Set([
@@ -157,6 +151,16 @@ const isForbiddenProviderFailure = (error: unknown): boolean => {
 
 export const isProviderFallbackEligibleFailure = (error: unknown): boolean =>
     isTransientProviderFailure(error) || isForbiddenProviderFailure(error)
+
+// FNV-1a: must stay stable across releases and processes — session-to-attempt pinning relies on it
+const hashStringToUint32 = (value: string): number => {
+    let hash = 0x811c9dc5
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index)
+        hash = Math.imul(hash, 0x01000193) >>> 0
+    }
+    return hash >>> 0
+}
 
 const splitCommaSeparatedValues = (value: unknown): string[] => {
     if (typeof value !== 'string') return []
@@ -392,27 +396,27 @@ export class ChatOpenRouter extends LangchainChatOpenAI implements IVisionChatMo
         if (attempts.length <= 1) return attempts
 
         const assignmentKey = this.getRoundRobinAssignmentStateKey(attempts)
-        const sessionKey = this.getRoundRobinSessionStateKey(assignmentKey)
-        this.pruneRoundRobinStates()
+        let startIndex: number
 
-        const now = Date.now()
-        const sessionState = roundRobinSessionStates.get(sessionKey)
-        let startIndex = sessionState ? this.normalizeAttemptIndex(sessionState.attemptIndex, attempts.length) : undefined
-
-        if (startIndex === undefined) {
+        if (this.roundRobinSessionId) {
+            // Sessions are pinned by hash, not by shared state: every worker process derives the
+            // same attempt for the same session, so conversations keep one model/key across
+            // scale-out and provider prompt caches stay warm between turns.
+            startIndex = this.normalizeAttemptIndex(
+                hashStringToUint32(this.getRoundRobinSessionStateKey(assignmentKey)),
+                attempts.length
+            )
+        } else {
+            // Sessionless callers (internal utilities) rotate per call within this process.
+            this.pruneRoundRobinStates()
             const assignmentState = roundRobinAssignmentStates.get(assignmentKey)
             startIndex = assignmentState ? this.normalizeAttemptIndex(assignmentState.nextIndex, attempts.length) : 0
 
             roundRobinAssignmentStates.set(assignmentKey, {
                 nextIndex: this.normalizeAttemptIndex(startIndex + 1, attempts.length),
-                lastUsedAt: now
+                lastUsedAt: Date.now()
             })
         }
-
-        roundRobinSessionStates.set(sessionKey, {
-            attemptIndex: startIndex,
-            lastUsedAt: now
-        })
 
         return [...attempts.slice(startIndex), ...attempts.slice(0, startIndex)]
     }
@@ -454,10 +458,6 @@ export class ChatOpenRouter extends LangchainChatOpenAI implements IVisionChatMo
 
         for (const [key, state] of roundRobinAssignmentStates) {
             if (now - state.lastUsedAt > ROUND_ROBIN_STATE_TTL_MS) roundRobinAssignmentStates.delete(key)
-        }
-
-        for (const [key, state] of roundRobinSessionStates) {
-            if (now - state.lastUsedAt > ROUND_ROBIN_STATE_TTL_MS) roundRobinSessionStates.delete(key)
         }
     }
 
