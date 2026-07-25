@@ -24,8 +24,13 @@ type RoundRobinState = {
     lastUsedAt: number
 }
 
+type ProviderErrorStatusFact = {
+    status: number
+    depth: number
+}
+
 type ProviderErrorFacts = {
-    statuses: number[]
+    statuses: ProviderErrorStatusFact[]
     codes: string[]
     types: string[]
     names: string[]
@@ -57,10 +62,19 @@ const TRANSIENT_PROVIDER_ERROR_TYPES = new Set([
 ])
 const TRANSIENT_PROVIDER_ERROR_NAMES = new Set(['APIConnectionError', 'APIConnectionTimeoutError', 'TimeoutError'])
 
+const HTTP_STATUS_MIN = 100
+const HTTP_STATUS_MAX = 599
+
 const toStatusCode = (value: unknown): number | undefined => {
-    if (typeof value === 'number' && Number.isInteger(value)) return value
-    if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) return parseInt(value.trim(), 10)
-    return undefined
+    let status: number | undefined
+
+    if (typeof value === 'number' && Number.isInteger(value)) status = value
+    else if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) status = parseInt(value.trim(), 10)
+
+    // Bounded so non-HTTP numerics (e.g. Node's negative `errno`) are never read as statuses.
+    if (status === undefined || status < HTTP_STATUS_MIN || status > HTTP_STATUS_MAX) return undefined
+
+    return status
 }
 
 const addStringFact = (target: string[], value: unknown): void => {
@@ -82,11 +96,18 @@ const collectProviderErrorFacts = (value: unknown, facts: ProviderErrorFacts, se
 
     for (const statusField of ['status', 'statusCode']) {
         const status = toStatusCode(value[statusField])
-        if (status !== undefined) facts.statuses.push(status)
+        if (status !== undefined) facts.statuses.push({ status, depth })
     }
 
+    // OpenRouter reports an upstream provider outage as an SSE-embedded error payload over an
+    // HTTP 200 stream: `{"error":{"message":"Provider returned error","code":500}}`. The OpenAI
+    // SDK throws that as `new APIError(undefined, data.error, ...)`, so `status` is undefined and
+    // the only trace of the 5xx is a numeric `code`. Read HTTP-shaped codes as statuses; anything
+    // else (e.g. 'ECONNRESET', 'insufficient_quota') stays a string error code.
     for (const codeField of ['code', 'errno']) {
-        addStringFact(facts.codes, value[codeField])
+        const status = toStatusCode(value[codeField])
+        if (status !== undefined) facts.statuses.push({ status, depth })
+        else addStringFact(facts.codes, value[codeField])
     }
 
     addStringFact(facts.types, value.type)
@@ -114,6 +135,17 @@ const isTransientProviderErrorMessage = (message: string): boolean => {
     )
 }
 
+// The status the caller actually received is the outermost one; anything nested deeper is the
+// context it wrapped. Deciding on the shallowest depth keeps a 5xx that carries an upstream 4xx
+// in its body (or in a wrapper's `cause` chain) from being vetoed as a non-retryable request error.
+const getDecisiveStatuses = (statuses: ProviderErrorStatusFact[]): number[] => {
+    if (!statuses.length) return []
+
+    const shallowestDepth = Math.min(...statuses.map((fact) => fact.depth))
+
+    return statuses.filter((fact) => fact.depth === shallowestDepth).map((fact) => fact.status)
+}
+
 export const isTransientProviderFailure = (error: unknown): boolean => {
     const facts = collectProviderErrorFacts(error, {
         statuses: [],
@@ -122,9 +154,10 @@ export const isTransientProviderFailure = (error: unknown): boolean => {
         names: [],
         messages: []
     })
+    const statuses = getDecisiveStatuses(facts.statuses)
 
-    if (facts.statuses.some((status) => status >= 400 && status < 500 && !TRANSIENT_PROVIDER_STATUS_CODES.has(status))) return false
-    if (facts.statuses.length) return facts.statuses.some((status) => TRANSIENT_PROVIDER_STATUS_CODES.has(status) || status >= 500)
+    if (statuses.some((status) => status >= 400 && status < 500 && !TRANSIENT_PROVIDER_STATUS_CODES.has(status))) return false
+    if (statuses.length) return statuses.some((status) => TRANSIENT_PROVIDER_STATUS_CODES.has(status) || status >= 500)
     if (facts.codes.some((code) => TRANSIENT_PROVIDER_ERROR_CODES.has(code))) return true
     if (facts.types.some((type) => TRANSIENT_PROVIDER_ERROR_TYPES.has(type))) return true
     if (facts.names.some((name) => TRANSIENT_PROVIDER_ERROR_NAMES.has(name))) return true
@@ -141,7 +174,9 @@ const isForbiddenProviderFailure = (error: unknown): boolean => {
         messages: []
     })
 
-    if (facts.statuses.some((status) => status === 403)) return true
+    // Unlike transient detection this scans every depth: a 403 anywhere means this key or route is
+    // rejected outright, and another provider is the only thing that can still serve the request.
+    if (facts.statuses.some((fact) => fact.status === 403)) return true
 
     return facts.messages.some((message) => {
         const normalized = message.trim().toLowerCase()
@@ -402,10 +437,7 @@ export class ChatOpenRouter extends LangchainChatOpenAI implements IVisionChatMo
             // Sessions are pinned by hash, not by shared state: every worker process derives the
             // same attempt for the same session, so conversations keep one model/key across
             // scale-out and provider prompt caches stay warm between turns.
-            startIndex = this.normalizeAttemptIndex(
-                hashStringToUint32(this.getRoundRobinSessionStateKey(assignmentKey)),
-                attempts.length
-            )
+            startIndex = this.normalizeAttemptIndex(hashStringToUint32(this.getRoundRobinSessionStateKey(assignmentKey)), attempts.length)
         } else {
             // Sessionless callers (internal utilities) rotate per call within this process.
             this.pruneRoundRobinStates()

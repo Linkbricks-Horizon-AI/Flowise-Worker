@@ -1,6 +1,7 @@
 import { AIMessage, AIMessageChunk } from '@langchain/core/messages'
 import { ChatGenerationChunk } from '@langchain/core/outputs'
-import { ChatOpenRouter } from './FlowiseChatOpenRouter'
+import { APIError, BadRequestError, InternalServerError } from 'openai'
+import { ChatOpenRouter, isProviderFallbackEligibleFailure } from './FlowiseChatOpenRouter'
 
 const createProviderError = (message: string, status: number): Error => {
     const error = new Error(message) as Error & { status: number; response: { status: number } }
@@ -381,12 +382,7 @@ describe('ChatOpenRouter fallback candidates', () => {
         await model._generate([], {} as any)
         await model._generate([], {} as any)
 
-        expect(model.attempts).toEqual([
-            'openai/gpt-5.4:key-a',
-            'openai/gpt-5.4:key-b',
-            'openai/gpt-5.5:key-a',
-            'openai/gpt-5.5:key-b'
-        ])
+        expect(model.attempts).toEqual(['openai/gpt-5.4:key-a', 'openai/gpt-5.4:key-b', 'openai/gpt-5.5:key-a', 'openai/gpt-5.5:key-b'])
     })
 
     it('tries remaining model/key pairs before failing when preferred fallbacks are exhausted', async () => {
@@ -572,5 +568,68 @@ describe('ChatOpenRouter fallback candidates', () => {
 
         expect(configuredModel).toBeInstanceOf(ChatOpenRouter)
         expect((configuredModel as any).defaultOptions.response_format).toEqual({ type: 'json_object' })
+    })
+})
+
+describe('provider fallback eligibility', () => {
+    // The body OpenRouter emits when the upstream provider itself fails.
+    const openRouterProviderErrorBody = {
+        message: 'Provider returned error',
+        code: 500,
+        metadata: { raw: '{"error":{"message":"internal server error"}}', provider_name: 'OpenAI' }
+    }
+
+    it('falls back when OpenRouter answers with an HTTP 5xx', () => {
+        const error = new InternalServerError(500, openRouterProviderErrorBody, undefined, new Headers())
+
+        expect(error.status).toBe(500)
+        expect(isProviderFallbackEligibleFailure(error)).toBe(true)
+    })
+
+    it('falls back when a provider 5xx arrives inside the SSE stream instead of as an HTTP status', () => {
+        // openai core/streaming.js throws `new APIError(undefined, data.error, undefined, headers)`
+        // for an error payload on an HTTP 200 stream, so the 5xx only survives as a numeric `code`.
+        const error = new APIError(undefined, openRouterProviderErrorBody, undefined, undefined)
+
+        expect(error.status).toBeUndefined()
+        expect(error.message).toBe('Provider returned error')
+        expect(isProviderFallbackEligibleFailure(error)).toBe(true)
+    })
+
+    it('falls back when the multi-attempt wrapper carries an SSE-embedded provider 5xx as its cause', () => {
+        const cause = new APIError(undefined, openRouterProviderErrorBody, undefined, undefined)
+        const error = new Error(`ChatOpenRouter failed for all fallback attempts (a, b): ${cause.message}`)
+        ;(error as any).cause = cause
+
+        expect(isProviderFallbackEligibleFailure(error)).toBe(true)
+    })
+
+    it('falls back for a 5xx that wraps an upstream 4xx rather than letting the nested status veto it', () => {
+        const error = new InternalServerError(
+            500,
+            { message: 'Provider returned error', response: { status: 400 } },
+            undefined,
+            new Headers()
+        )
+
+        expect(isProviderFallbackEligibleFailure(error)).toBe(true)
+    })
+
+    it('does not fall back when the SSE-embedded error is a request error', () => {
+        const error = new APIError(undefined, { message: 'Invalid request', code: 400 }, undefined, undefined)
+
+        expect(isProviderFallbackEligibleFailure(error)).toBe(false)
+    })
+
+    it('does not fall back for an HTTP 4xx request error', () => {
+        const error = new BadRequestError(400, { message: 'Invalid request', code: 'invalid_request_error' }, undefined, new Headers())
+
+        expect(isProviderFallbackEligibleFailure(error)).toBe(false)
+    })
+
+    it('falls back for socket failures without reading a negative errno as a status', () => {
+        const error = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', errno: -54, syscall: 'read' })
+
+        expect(isProviderFallbackEligibleFailure(error)).toBe(true)
     })
 })
