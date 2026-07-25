@@ -9,7 +9,6 @@ import {
     convertTextToSpeechStream,
     ICommonObject,
     addSingleFileToStorage,
-    generateFollowUpPrompts,
     IAction,
     addArrayFilesToStorage,
     mapMimeTypeToInputField,
@@ -61,6 +60,7 @@ import {
     syncNodeInputsWithEdges
 } from '../utils'
 import { validateFileMimeTypeAndExtensionMatch } from './fileValidation'
+import { resolveFollowUpPrompts } from './followUpPrompts'
 import { validateFlowAPIKey } from './validateKey'
 import logger from './logger'
 import { utilAddChatMessage } from './addChatMesage'
@@ -664,18 +664,13 @@ export const executeFlow = async ({
             if (agentReasoning?.length) apiMessage.agentReasoning = JSON.stringify(agentReasoning)
             if (finalAction && Object.keys(finalAction).length) apiMessage.action = JSON.stringify(finalAction)
 
-            if (agentflow.followUpPrompts) {
-                const followUpPromptsConfig = JSON.parse(agentflow.followUpPrompts)
-                const generatedFollowUpPrompts = await generateFollowUpPrompts(followUpPromptsConfig, apiMessage.content, {
-                    chatId,
-                    chatflowid: agentflow.id,
-                    appDataSource,
-                    databaseEntities
-                })
-                if (generatedFollowUpPrompts?.questions) {
-                    apiMessage.followUpPrompts = JSON.stringify(generatedFollowUpPrompts.questions)
-                }
-            }
+            const generatedFollowUpPrompts = await resolveFollowUpPrompts(agentflow.followUpPrompts, apiMessage.content, {
+                chatId,
+                chatflowid: agentflow.id,
+                appDataSource,
+                databaseEntities
+            })
+            if (generatedFollowUpPrompts) apiMessage.followUpPrompts = generatedFollowUpPrompts
             const chatMessage = await utilAddChatMessage(apiMessage, appDataSource)
 
             await telemetry.sendTelemetry(
@@ -877,18 +872,13 @@ export const executeFlow = async ({
         if (result?.fileAnnotations) apiMessage.fileAnnotations = JSON.stringify(result.fileAnnotations)
         if (result?.artifacts) apiMessage.artifacts = JSON.stringify(result.artifacts)
         if (result?.action) apiMessage.action = typeof result.action === 'string' ? result.action : JSON.stringify(result.action)
-        if (chatflow.followUpPrompts) {
-            const followUpPromptsConfig = JSON.parse(chatflow.followUpPrompts)
-            const followUpPrompts = await generateFollowUpPrompts(followUpPromptsConfig, apiMessage.content, {
-                chatId,
-                chatflowid,
-                appDataSource,
-                databaseEntities
-            })
-            if (followUpPrompts?.questions) {
-                apiMessage.followUpPrompts = JSON.stringify(followUpPrompts.questions)
-            }
-        }
+        const followUpPrompts = await resolveFollowUpPrompts(chatflow.followUpPrompts, apiMessage.content, {
+            chatId,
+            chatflowid,
+            appDataSource,
+            databaseEntities
+        })
+        if (followUpPrompts) apiMessage.followUpPrompts = followUpPrompts
 
         const chatMessage = await utilAddChatMessage(apiMessage, appDataSource)
 

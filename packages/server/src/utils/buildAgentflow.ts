@@ -11,7 +11,6 @@ import {
     IMessage,
     IServerSideEventStreamer,
     convertChatHistoryToText,
-    generateFollowUpPrompts,
     tracingEnvEnabled
 } from 'flowise-components'
 import {
@@ -55,6 +54,7 @@ import logger from './logger'
 import { getErrorMessage } from '../errors/utils'
 import { Execution } from '../database/entities/Execution'
 import { utilAddChatMessage } from './addChatMesage'
+import { resolveFollowUpPrompts } from './followUpPrompts'
 import { CachePool } from '../CachePool'
 import { ChatMessage } from '../database/entities/ChatMessage'
 import { Telemetry } from './telemetry'
@@ -2392,20 +2392,15 @@ export const executeAgentFlow = async ({
     if (lastNodeOutput?.fileAnnotations) apiMessage.fileAnnotations = JSON.stringify(lastNodeOutput.fileAnnotations)
     if (lastNodeOutput?.artifacts) apiMessage.artifacts = JSON.stringify(lastNodeOutput.artifacts)
     if (lastNodeOutput?.reasonContent) apiMessage.reasonContent = JSON.stringify(lastNodeOutput.reasonContent)
-    if (chatflow.followUpPrompts) {
-        const followUpPromptsConfig = JSON.parse(chatflow.followUpPrompts)
-        const followUpPrompts = await generateFollowUpPrompts(followUpPromptsConfig, apiMessage.content, {
-            orgId,
-            workspaceId,
-            chatId,
-            chatflowid,
-            appDataSource,
-            databaseEntities
-        })
-        if (followUpPrompts?.questions) {
-            apiMessage.followUpPrompts = JSON.stringify(followUpPrompts.questions)
-        }
-    }
+    const followUpPrompts = await resolveFollowUpPrompts(chatflow.followUpPrompts, apiMessage.content, {
+        orgId,
+        workspaceId,
+        chatId,
+        chatflowid,
+        appDataSource,
+        databaseEntities
+    })
+    if (followUpPrompts) apiMessage.followUpPrompts = followUpPrompts
     if (lastNodeOutput?.humanInputAction && Object.keys(lastNodeOutput.humanInputAction).length)
         apiMessage.action = JSON.stringify(lastNodeOutput.humanInputAction)
 
