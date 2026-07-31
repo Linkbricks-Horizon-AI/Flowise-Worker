@@ -3,9 +3,9 @@ import express from 'express'
 import passport from 'passport'
 import { IAssignedWorkspace, LoggedInUser } from '../Interface.Enterprise'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
+import { AccountService } from '../services/account.service'
 import { UserErrorMessage, UserService } from '../services/user.service'
 import { WorkspaceUserService } from '../services/workspace-user.service'
-import { AccountService } from '../services/account.service'
 import { WorkspaceUser } from '../database/entities/workspace-user.entity'
 import { OrganizationService } from '../services/organization.service'
 import { GeneralRole } from '../database/entities/role.entity'
@@ -79,18 +79,10 @@ abstract class SSOBase {
                 }
             } else {
                 if (user.status === UserStatus.INVITED) {
-                    const data: any = {
-                        user: {
-                            ...user,
-                            email,
-                            name: profile.displayName || '',
-                            status: UserStatus.ACTIVE,
-                            credential: undefined
-                        }
-                    }
-                    const accountService = new AccountService()
-                    const newAccount = await accountService.register(data)
-                    user = newAccount.user
+                    // Do not auto-activate an invited user via SSO. Completing the invitation
+                    // proves control of the emailed tempToken; an SSO login only proves the
+                    // identity provider's email assertion, which is not equivalent proof.
+                    throw new InternalFlowiseError(StatusCodes.FORBIDDEN, UserErrorMessage.USER_INVITED_PENDING_ACTIVATION)
                 }
                 let wsUserOrUsers = await workspaceUserService.readWorkspaceUserByLastLogin(user?.id, queryRunner)
                 wu = Array.isArray(wsUserOrUsers) && wsUserOrUsers.length > 0 ? wsUserOrUsers[0] : (wsUserOrUsers as WorkspaceUser)
