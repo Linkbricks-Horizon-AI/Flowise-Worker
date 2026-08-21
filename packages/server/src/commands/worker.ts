@@ -46,7 +46,13 @@ export default class Worker extends BaseCommand {
         const queueEvents = new QueueEvents(predictionQueueName, { connection: queueManager.getConnection() })
 
         queueEvents.on<CustomListener>('abort', async ({ id }: { id: string }) => {
+            // Two id namespaces, non-overlapping: a per-execution relayExecutionId (uuid) → exact abort,
+            // or a chat-scope key `${chatflowid}_${chatId}` from the public abort API → abort every
+            // execution indexed under that scope. Trying both is always safe: abort(id) no-ops for a
+            // scope key (nothing registered under it directly), and abortAllForScope(id) falls back to an
+            // exact abort for a relay id (no scope set). Covers rolling deploys where either id shape arrives.
             abortControllerPool.abort(id)
+            abortControllerPool.abortAllForScope(id)
         })
 
         /** Upsertion */

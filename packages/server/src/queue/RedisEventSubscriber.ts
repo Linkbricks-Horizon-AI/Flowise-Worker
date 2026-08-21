@@ -103,7 +103,14 @@ export class RedisEventSubscriber {
     }
 
     private handleEvent(message: string) {
-        let event: { eventType?: string; chatId?: string; chatMessageId?: string; data?: any; duration?: number }
+        let event: {
+            eventType?: string
+            chatId?: string
+            relayExecutionId?: string
+            chatMessageId?: string
+            data?: any
+            duration?: number
+        }
         try {
             event = JSON.parse(message)
         } catch (err) {
@@ -111,11 +118,18 @@ export class RedisEventSubscriber {
             return
         }
 
-        const { eventType, chatId, chatMessageId, data, duration } = event
-        if (!eventType || !chatId) {
-            logger.warn(`[RedisEventSubscriber] Invalid event shape (missing eventType or chatId):`, { event })
+        const { eventType, chatMessageId, data, duration } = event
+        // SSE slot / route key: prefer the transport relayExecutionId (per-execution isolation);
+        // fall back to the semantic chatId for legacy workers that don't stamp a relay id. The SSE
+        // slot key registered by the controller matches whichever the worker publishes with.
+        const routeKey = event.relayExecutionId ?? event.chatId
+        if (!eventType || !routeKey) {
+            logger.warn(`[RedisEventSubscriber] Invalid event shape (missing eventType or route key):`, { event })
             return
         }
+        // Named chatId below is the route key for stream dispatch; the semantic chatId travels inside
+        // each event's data payload untouched (client-facing metadata, $flow.chatId, etc.).
+        const chatId = routeKey
 
         const chatMessageIdStr = chatMessageId ?? ''
         const dataObj = data ?? {}
