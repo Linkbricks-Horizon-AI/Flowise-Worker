@@ -991,7 +991,12 @@ const checkIfStreamValid = async (
  * @param {Request} req
  * @param {boolean} isInternal
  */
-export const utilBuildChatflow = async (req: Request, isInternal: boolean = false, chatType?: ChatType): Promise<any> => {
+export const utilBuildChatflow = async (
+    req: Request,
+    isInternal: boolean = false,
+    chatType?: ChatType,
+    relayExecutionId?: string
+): Promise<any> => {
     const appServer = getRunningExpressApp()
 
     const chatflowid = req.params.id
@@ -1010,7 +1015,11 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
     const incomingInput: IncomingInput = req.body || {} // Ensure incomingInput is never undefined
     const chatId = incomingInput.chatId ?? incomingInput.overrideConfig?.sessionId ?? uuidv4()
     const files = (req.files as Express.Multer.File[]) || []
-    const abortControllerId = `${chatflow.id}_${chatId}`
+    // Chat-scope abort key (public abort API contract). When relay-scoping is active the per-execution
+    // abort key is relayExecutionId, with this chat-scope used as the index so the public API can still
+    // abort every execution of the conversation. Non-QUEUE mode registers under the relay key directly.
+    const chatScopeAbortId = `${chatflow.id}_${chatId}`
+    const abortControllerId = relayExecutionId ?? chatScopeAbortId
     const isTool = req.get('flowise-tool') === 'true'
     const isToolStreaming = req.get('flowise-tool-stream') === 'true'
     const isEvaluation: boolean = req.headers['X-Flowise-Evaluation'] || req.body.evaluation
@@ -1084,7 +1093,11 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
             orgId,
             workspaceId,
             subscriptionId,
-            productId
+            productId,
+            // Transport-only per-execution id (undefined when relay-scoping is off → legacy chatId
+            // channel). Threaded to the worker via job data; the worker publishes on this channel and
+            // registers its abort controller under it. Scalar → not omitted by OMIT_QUEUE_JOB_DATA.
+            relayExecutionId
         }
 
         if (process.env.MODE === MODE.QUEUE) {
@@ -1108,9 +1121,10 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
             incrementSuccessMetricCounter(appServer.metricsProvider, isInternal, isAgentFlow)
             return result
         } else {
-            // Add abort controller to the pool
+            // Add abort controller to the pool. When relay-scoped, index under the chat-scope key so
+            // the public abort API (chatflowid+chatId) can still reach this execution via abortAllForScope.
             const signal = new AbortController()
-            appServer.abortControllerPool.add(abortControllerId, signal)
+            appServer.abortControllerPool.add(abortControllerId, signal, relayExecutionId ? chatScopeAbortId : undefined)
             executeData.signal = signal
 
             const result = await executeFlow(executeData)
@@ -1122,7 +1136,7 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
         }
     } catch (e) {
         logger.error(`[server]:${organizationId}/${chatflow.id}/${chatId} Error:`, e)
-        appServer.abortControllerPool.remove(`${chatflow.id}_${chatId}`)
+        appServer.abortControllerPool.remove(abortControllerId)
         incrementFailedMetricCounter(appServer.metricsProvider, isInternal, isAgentFlow)
         if (e instanceof InternalFlowiseError && e.statusCode === StatusCodes.UNAUTHORIZED) {
             throw e

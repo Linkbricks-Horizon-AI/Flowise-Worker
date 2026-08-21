@@ -187,6 +187,10 @@ const removeChatMessagesByMessageIds = async (
     }
 }
 
+// Public abort API: stop EVERY execution of chatflowid+chatId (contract unchanged — the caller only
+// knows the conversation, not individual executions). The chat-scope id resolves to abortAllForScope on
+// the worker (abort listener) / locally, which aborts all relay-scoped executions indexed under it, or
+// falls back to an exact abort for a legacy chat-scope registration.
 const abortChatMessage = async (chatId: string, chatflowid: string) => {
     try {
         const appServer = getRunningExpressApp()
@@ -198,12 +202,36 @@ const abortChatMessage = async (chatId: string, chatflowid: string) => {
                 id
             })
         } else {
-            appServer.abortControllerPool.abort(id)
+            appServer.abortControllerPool.abortAllForScope(id)
         }
     } catch (error) {
         throw new InternalFlowiseError(
             StatusCodes.INTERNAL_SERVER_ERROR,
             `Error: chatMessagesService.abortChatMessage - ${getErrorMessage(error)}`
+        )
+    }
+}
+
+// Per-execution abort: stop only the given relayExecutionId, leaving sibling executions of the same
+// conversation running. Used by the streaming controllers' client-disconnect handler so a superseded
+// fetch abort (or a closed tab) doesn't kill a concurrent execution of the same chat. The relay id is
+// a uuid, a different namespace from the chat-scope `${chatflowid}_${chatId}`, so the worker's abort
+// listener routes it to an exact abort.
+const abortExecution = async (relayExecutionId: string) => {
+    try {
+        const appServer = getRunningExpressApp()
+        if (process.env.MODE === MODE.QUEUE) {
+            await appServer.queueManager.getPredictionQueueEventsProducer().publishEvent({
+                eventName: 'abort',
+                id: relayExecutionId
+            })
+        } else {
+            appServer.abortControllerPool.abort(relayExecutionId)
+        }
+    } catch (error) {
+        throw new InternalFlowiseError(
+            StatusCodes.INTERNAL_SERVER_ERROR,
+            `Error: chatMessagesService.abortExecution - ${getErrorMessage(error)}`
         )
     }
 }
@@ -225,6 +253,7 @@ export default {
     removeAllChatMessages,
     removeChatMessagesByMessageIds,
     abortChatMessage,
+    abortExecution,
     getMessagesByChatflowIds,
     getMessagesFeedbackByChatflowIds
 }

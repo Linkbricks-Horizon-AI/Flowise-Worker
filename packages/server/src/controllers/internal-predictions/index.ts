@@ -8,6 +8,7 @@ import { utilBuildChatflow } from '../../utils/buildChatflow'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 import chatMessagesService from '../../services/chat-messages'
 import logger from '../../utils/logger'
+import { resolveTransportKey } from '../../utils/relayConfig'
 
 // Send input message and get prediction result (Internal)
 const createInternalPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -36,16 +37,23 @@ const createAndStreamInternalPrediction = async (req: Request, res: Response, ne
     const chatId = req.body.chatId
     const sseStreamer = getRunningExpressApp().sseStreamer
     const isQueueMode = process.env.MODE === MODE.QUEUE
+    // Transport key (channel/SSE-slot/abort): relayExecutionId when the feature is on (per-execution
+    // isolation), else the semantic chatId (legacy). chatId still flows to metadata/persistence unchanged.
+    const { transportKey, relayExecutionId } = resolveTransportKey(chatId)
 
     try {
-        sseStreamer.addClient(chatId, res)
+        sseStreamer.addClient(transportKey, res)
         // If the client disconnects before the stream finishes, abort the in-flight job so the
-        // worker stops instead of running to completion. Same abort path as an explicit user abort;
-        // the writableEnded guard means a normal completion never triggers an abort.
+        // worker stops instead of running to completion. When relay-scoped, abort ONLY this execution
+        // so a new message closing the previous stream doesn't kill a concurrent execution of the same
+        // chat; else fall back to chat-scope abort. writableEnded guard: a normal completion never aborts.
         res.on('close', () => {
             if (res.writableEnded || !chatId) return
-            chatMessagesService.abortChatMessage(chatId, req.params.id).catch((err) => {
-                logger.warn(`[server]: abort on client disconnect failed for ${chatId}: ${getErrorMessage(err)}`)
+            const abortPromise = relayExecutionId
+                ? chatMessagesService.abortExecution(relayExecutionId)
+                : chatMessagesService.abortChatMessage(chatId, req.params.id)
+            abortPromise.catch((err) => {
+                logger.warn(`[server]: abort on client disconnect failed for ${transportKey}: ${getErrorMessage(err)}`)
             })
         })
         res.setHeader('Content-Type', 'text/event-stream')
@@ -55,21 +63,22 @@ const createAndStreamInternalPrediction = async (req: Request, res: Response, ne
         res.flushHeaders()
 
         if (isQueueMode) {
-            await getRunningExpressApp().redisSubscriber.subscribe(chatId)
+            await getRunningExpressApp().redisSubscriber.subscribe(transportKey)
         }
 
-        const apiResponse = await utilBuildChatflow(req, true)
-        sseStreamer.streamMetadataEvent(apiResponse.chatId, apiResponse)
+        const apiResponse = await utilBuildChatflow(req, true, undefined, relayExecutionId)
+        // Metadata slot key MUST be the transport key or the final metadata frame is dropped.
+        sseStreamer.streamMetadataEvent(transportKey, apiResponse)
     } catch (error) {
-        if (chatId) {
-            sseStreamer.streamErrorEvent(chatId, getErrorMessage(error))
+        if (transportKey) {
+            sseStreamer.streamErrorEvent(transportKey, getErrorMessage(error))
         }
         next(error)
     } finally {
-        if (isQueueMode && chatId) {
-            await getRunningExpressApp().redisSubscriber.unsubscribe(chatId)
+        if (isQueueMode && transportKey) {
+            await getRunningExpressApp().redisSubscriber.unsubscribe(transportKey)
         }
-        sseStreamer.removeClient(chatId)
+        sseStreamer.removeClient(transportKey)
     }
 }
 export default {
