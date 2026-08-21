@@ -483,6 +483,11 @@ export interface IExecuteFlowParams extends IPredictionQueueAppServer {
     // can be forwarded to the parent. Default/absent preserves the existing isTool behavior.
     isToolStreaming?: boolean
     chatType?: ChatType
+    // Transport-only per-execution id (uuid). When set, the worker publishes stream events on this
+    // relay channel and registers its abort controller under this key (scoped to chatflowid_chatId),
+    // isolating concurrent/overlapping executions of the same conversation. The semantic chatId is
+    // unchanged. Scalar → survives BullMQ job-data serialization; must NOT be in OMIT_QUEUE_JOB_DATA.
+    relayExecutionId?: string
 }
 
 export interface INodeOverrides {

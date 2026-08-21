@@ -71,7 +71,13 @@ export class PredictionQueue extends BaseQueue {
         if (this.cachePool) data.cachePool = this.cachePool
         if (this.usageCacheManager) data.usageCacheManager = this.usageCacheManager
         if (this.componentNodes) data.componentNodes = this.componentNodes
-        if (this.redisPublisher) data.sseStreamer = this.redisPublisher
+        if (this.redisPublisher) {
+            // Relay-scoped transport: when the job carries a relayExecutionId, publish stream events on
+            // that per-execution channel (payload/semantic chatId untouched) so concurrent executions of
+            // the same conversation don't share one channel. Data-driven + backward compatible — a job
+            // without relayExecutionId (legacy web, or feature off) keeps publishing on the chatId channel.
+            data.sseStreamer = data.relayExecutionId ? this.redisPublisher.withChannel(data.relayExecutionId) : this.redisPublisher
+        }
 
         if (Object.prototype.hasOwnProperty.call(data, 'isAgentFlowGenerator')) {
             logger.info(`Generating Agentflow...`)
@@ -99,9 +105,13 @@ export class PredictionQueue extends BaseQueue {
 
         let abortControllerId: string | undefined
         if (this.abortControllerPool) {
-            abortControllerId = `${data.chatflow.id}_${data.chatId}`
+            // Per-execution abort key (relayExecutionId) when relay-scoped, indexed under the chat-scope
+            // key so the public abort API (chatflowid+chatId → abortAllForScope) still reaches it. Legacy
+            // jobs (no relayExecutionId) register under the chat-scope key directly, as before.
+            const chatScopeAbortId = `${data.chatflow.id}_${data.chatId}`
+            abortControllerId = data.relayExecutionId ?? chatScopeAbortId
             const signal = new AbortController()
-            this.abortControllerPool.add(abortControllerId, signal)
+            this.abortControllerPool.add(abortControllerId, signal, data.relayExecutionId ? chatScopeAbortId : undefined)
             data.signal = signal
         }
 
