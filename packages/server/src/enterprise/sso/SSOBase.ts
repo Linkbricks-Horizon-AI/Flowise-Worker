@@ -3,7 +3,6 @@ import express from 'express'
 import passport from 'passport'
 import { IAssignedWorkspace, LoggedInUser, LoginActivityCode } from '../Interface.Enterprise'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
-import { AccountService } from '../services/account.service'
 import auditService from '../services/audit'
 import { UserErrorMessage, UserService } from '../services/user.service'
 import { WorkspaceUserService } from '../services/workspace-user.service'
@@ -72,6 +71,10 @@ abstract class SSOBase {
                     }
                 }
                 if (getRunningExpressApp().identityManager.getPlatformType() === Platform.CLOUD) {
+                    // [fork] lazy import: a static import creates a circular module graph
+                    // (SSOBase -> account.service -> quotaUsage -> constants -> Auth0SSO -> SSOBase)
+                    // that breaks suite loading under jest
+                    const { AccountService } = await import('../services/account.service')
                     const accountService = new AccountService()
                     const newAccount = await accountService.register(data)
                     wu = newAccount.workspaceUser
