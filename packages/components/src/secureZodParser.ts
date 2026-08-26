@@ -452,6 +452,12 @@ export class SecureZodSchemaParser {
             // Array argument
             const arrayContent = inner.slice(1, -1)
             return [this.parseArrayContent(arrayContent)]
+        } else if (inner === 'true' || inner === 'false') {
+            // Boolean argument — must stay a boolean. If it degrades to the string
+            // 'false', z.boolean().default('false') fails inner validation with
+            // "Expected boolean, received string" whenever the field is omitted.
+            // Quoted "true"/"false" still parse as strings via isQuotedString below.
+            return [inner === 'true']
         } else if (inner.match(/^\d+$/)) {
             // Number argument
             return [parseInt(inner, 10)]
@@ -462,6 +468,7 @@ export class SecureZodSchemaParser {
             // Try to parse as comma-separated values
             return this.splitArguments(inner).map((arg) => {
                 arg = arg.trim()
+                if (arg === 'true' || arg === 'false') return arg === 'true'
                 if (arg.match(/^\d+$/)) return parseInt(arg, 10)
                 if (this.isQuotedString(arg)) return this.unquoteString(arg)
                 return arg
