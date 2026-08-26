@@ -809,7 +809,12 @@ describe('assertReadOnlySqlStatement', () => {
             [
                 'sqlite introspection query using pragma_table_info as a table-valued function',
                 "SELECT m.name AS table_name, p.name AS column_name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table'"
-            ]
+            ],
+            ['write keyword inside a string literal', "SELECT * FROM audit_log WHERE action = 'delete'"],
+            ['write keyword as a double-quoted identifier', 'SELECT "update" FROM change_requests'],
+            ['write keyword inside a line comment', 'SELECT id FROM users -- update applied manually'],
+            ['write keyword inside a block comment', 'SELECT id FROM users /* pending INSERT review */'],
+            ['recursive cte select', 'WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt LIMIT 5) SELECT x FROM cnt']
         ])('should not throw for %s', (_desc, sql) => {
             expect(() => assertReadOnlySqlStatement(sql)).not.toThrow()
         })
@@ -827,7 +832,12 @@ describe('assertReadOnlySqlStatement', () => {
             ['delete', 'DELETE FROM users'],
             ['drop table', 'DROP TABLE users'],
             ['load_extension call', "SELECT load_extension('/tmp/evil.so')"],
-            ['load_extension call mixed case', "SELECT LOAD_EXTENSION('/tmp/evil.so')"]
+            ['load_extension call mixed case', "SELECT LOAD_EXTENSION('/tmp/evil.so')"],
+            ['cte-prefixed insert (WITH bypass)', 'WITH x AS (SELECT 1) INSERT INTO users (name) SELECT * FROM x'],
+            ['cte-prefixed update (WITH bypass)', "WITH x AS (SELECT 1) UPDATE users SET name = 'evil'"],
+            ['cte-prefixed delete (WITH bypass)', 'WITH x AS (SELECT 1) DELETE FROM users'],
+            ['cte-prefixed replace (WITH bypass)', "WITH x AS (SELECT 1) REPLACE INTO users (name) VALUES ('evil')"],
+            ['keyword hidden behind a comment', 'WITH x AS (SELECT 1) /* harmless */ DELETE FROM users']
         ])('should throw for %s', (_desc, sql) => {
             expect(() => assertReadOnlySqlStatement(sql)).toThrow()
         })

@@ -393,6 +393,22 @@ export const assertReadOnlySqlStatement = (sql: string): void => {
         throw new Error('Invalid SQL statement: only read-only SELECT/WITH statements are allowed')
     }
 
+    // A leading WITH does not guarantee a read-only statement: SQLite allows
+    // `WITH cte AS (...) INSERT/UPDATE/DELETE ...`. Scan for write/DDL keywords
+    // after removing comments, string literals and quoted identifiers so that
+    // words inside quoted data (e.g. WHERE action = 'delete') stay allowed.
+    const withoutQuotedOrComments = trimmed
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/--[^\n\r]*/g, ' ')
+        .replace(/'(?:[^']|'')*'/g, "''")
+        .replace(/"(?:[^"]|"")*"/g, '""')
+    const writeOrDdlKeyword =
+        /\b(INSERT|UPDATE|DELETE|REPLACE|MERGE|ATTACH|DETACH|CREATE|DROP|ALTER|TRUNCATE|VACUUM|PRAGMA|REINDEX|ANALYZE)\b/i
+    const keywordMatch = withoutQuotedOrComments.match(writeOrDdlKeyword)
+    if (keywordMatch) {
+        throw new Error(`Invalid SQL statement: write/DDL keyword ${keywordMatch[1].toUpperCase()} is not allowed`)
+    }
+
     if (/load_extension\s*\(/i.test(trimmed)) {
         throw new Error('Invalid SQL statement: load_extension is not allowed')
     }
