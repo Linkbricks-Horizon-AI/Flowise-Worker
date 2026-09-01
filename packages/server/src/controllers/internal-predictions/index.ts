@@ -9,6 +9,7 @@ import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 import chatMessagesService from '../../services/chat-messages'
 import logger from '../../utils/logger'
 import { resolveTransportKey } from '../../utils/relayConfig'
+import { finalizeSseResponse } from '../../queue/finalizeSseResponse'
 
 // Send input message and get prediction result (Internal)
 const createInternalPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -75,10 +76,11 @@ const createAndStreamInternalPrediction = async (req: Request, res: Response, ne
         }
         next(error)
     } finally {
-        if (isQueueMode && transportKey) {
-            await getRunningExpressApp().redisSubscriber.unsubscribe(transportKey)
-        }
-        sseStreamer.removeClient(transportKey)
+        finalizeSseResponse({
+            transportKey,
+            sseStreamer,
+            redisSubscriber: isQueueMode ? getRunningExpressApp().redisSubscriber : undefined
+        })
     }
 }
 export default {

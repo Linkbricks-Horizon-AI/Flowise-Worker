@@ -49,6 +49,22 @@ describe('resilientWaitUntilFinished', () => {
         expect(result).toEqual({ text: 'recovered' })
     })
 
+    test('recovers when BullMQ stalls before its own TTL starts', async () => {
+        const wait = jest.fn().mockReturnValue(new Promise(() => undefined))
+        const freshJob = { getState: jest.fn().mockResolvedValue('completed'), returnvalue: { text: 'outer-timeout-recovery' } }
+        const getJob = jest.fn().mockResolvedValue(freshJob)
+        const job = makeJob('2b', wait)
+
+        const result = await resilientWaitUntilFinished(makeQueue(getJob) as any, job as any, queueEvents, {
+            pollTtlMs: 10,
+            maxTotalMs: 100,
+            stateReadTtlMs: 10
+        })
+
+        expect(result).toEqual({ text: 'outer-timeout-recovery' })
+        expect(getJob).toHaveBeenCalledTimes(1)
+    })
+
     test('throws the failure reason when the job actually failed', async () => {
         const wait = jest.fn().mockRejectedValue(new Error('timed out before finishing'))
         const freshJob = { getState: jest.fn().mockResolvedValue('failed'), failedReason: 'boom' }
@@ -76,6 +92,39 @@ describe('resilientWaitUntilFinished', () => {
         const job = makeJob('5', wait)
 
         await expect(resilientWaitUntilFinished(makeQueue(getJob) as any, job as any, queueEvents)).rejects.toBeInstanceOf(JobNotFoundError)
+    })
+
+    test('retries a transient Redis lookup error instead of treating the job as missing', async () => {
+        const wait = jest.fn().mockRejectedValue(new Error('timed out before finishing'))
+        const freshJob = { getState: jest.fn().mockResolvedValue('completed'), returnvalue: { text: 'after-reconnect' } }
+        const getJob = jest.fn().mockRejectedValueOnce(new Error('Redis reconnecting')).mockResolvedValueOnce(freshJob)
+        const job = makeJob('5b', wait)
+
+        const result = await resilientWaitUntilFinished(makeQueue(getJob) as any, job as any, queueEvents, {
+            pollTtlMs: 10,
+            maxTotalMs: 100,
+            stateReadTtlMs: 10,
+            retryDelayMs: 1
+        })
+
+        expect(result).toEqual({ text: 'after-reconnect' })
+        expect(getJob).toHaveBeenCalledTimes(2)
+    })
+
+    test('bounds a Redis state read that never settles', async () => {
+        const wait = jest.fn().mockRejectedValue(new Error('timed out before finishing'))
+        const freshJob = { getState: jest.fn().mockReturnValue(new Promise(() => undefined)) }
+        const getJob = jest.fn().mockResolvedValue(freshJob)
+        const job = makeJob('5c', wait)
+
+        await expect(
+            resilientWaitUntilFinished(makeQueue(getJob) as any, job as any, queueEvents, {
+                pollTtlMs: 5,
+                maxTotalMs: 30,
+                stateReadTtlMs: 5,
+                retryDelayMs: 1
+            })
+        ).rejects.toThrow(/max wait/i)
     })
 
     test('gives up with an error once the max total wait is exceeded while still running', async () => {

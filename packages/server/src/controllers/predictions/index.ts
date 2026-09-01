@@ -11,6 +11,7 @@ import { getErrorMessage } from '../../errors/utils'
 import { MODE } from '../../Interface'
 import chatMessagesService from '../../services/chat-messages'
 import { resolveTransportKey } from '../../utils/relayConfig'
+import { finalizeSseResponse } from '../../queue/finalizeSseResponse'
 
 // Send input message and get prediction result (External)
 const createPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -111,10 +112,11 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                     }
                     next(error)
                 } finally {
-                    if (isQueueMode && transportKey) {
-                        await getRunningExpressApp().redisSubscriber.unsubscribe(transportKey)
-                    }
-                    sseStreamer.removeClient(transportKey)
+                    finalizeSseResponse({
+                        transportKey,
+                        sseStreamer,
+                        redisSubscriber: isQueueMode ? getRunningExpressApp().redisSubscriber : undefined
+                    })
                 }
             } else {
                 const apiResponse = await predictionsServices.buildChatflow(req)
