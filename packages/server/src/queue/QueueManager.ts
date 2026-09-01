@@ -114,6 +114,29 @@ export class QueueManager {
         return counts
     }
 
+    public async isReady(): Promise<boolean> {
+        if (this.queues.size === 0) return false
+
+        try {
+            const queueReadiness = await Promise.all(Array.from(this.queues.values()).map((queue) => queue.isReady()))
+            if (queueReadiness.some((ready) => !ready)) return false
+
+            if (this.predictionQueueEventsProducer) {
+                const producerClient = await this.predictionQueueEventsProducer.client
+                if (producerClient.status !== 'ready') return false
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    public async close(): Promise<void> {
+        const closeOperations: Promise<unknown>[] = Array.from(this.queues.values()).map((queue) => queue.close())
+        if (this.predictionQueueEventsProducer) closeOperations.push(this.predictionQueueEventsProducer.close())
+        await Promise.allSettled(closeOperations)
+    }
+
     public setupAllQueues({
         componentNodes,
         telemetry,

@@ -13,7 +13,7 @@ import { getDataSource } from './DataSource'
 import { Organization } from './enterprise/database/entities/organization.entity'
 import { Workspace } from './enterprise/database/entities/workspace.entity'
 import { LoggedInUser } from './enterprise/Interface.Enterprise'
-import { initializeJwtCookieMiddleware, verifyToken, verifyTokenForBullMQDashboard } from './enterprise/middleware/passport'
+import { initializeJwtCookieMiddleware, verifyToken } from './enterprise/middleware/passport'
 import { initAuthSecrets } from './enterprise/utils/authSecrets'
 import { IdentityManager } from './IdentityManager'
 import { MODE, Platform } from './Interface'
@@ -40,18 +40,18 @@ import { getCorsOptions, getIframeSecurityHeaders, sanitizeMiddleware, validateC
 import type { NextFunction } from 'express'
 
 function queuesBasicAuth(req: Request, res: Response, next: NextFunction) {
-  const user = process.env.FLOWISE_USERNAME || ''
-  const pass = process.env.FLOWISE_PASSWORD || ''
-  const hdr = req.headers.authorization || ''
-  if (!user || !pass) return res.status(403).send('Auth not configured')
-  if (!hdr.startsWith('Basic ')) {
+    const user = process.env.FLOWISE_USERNAME || ''
+    const pass = process.env.FLOWISE_PASSWORD || ''
+    const hdr = req.headers.authorization || ''
+    if (!user || !pass) return res.status(403).send('Auth not configured')
+    if (!hdr.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
+        return res.sendStatus(401)
+    }
+    const [u, p] = Buffer.from(hdr.split(' ')[1], 'base64').toString().split(':')
+    if (u === user && p === pass) return next()
     res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
     return res.sendStatus(401)
-  }
-  const [u, p] = Buffer.from(hdr.split(' ')[1], 'base64').toString().split(':')
-  if (u === user && p === pass) return next()
-  res.setHeader('WWW-Authenticate', 'Basic realm="Queues"')
-  return res.sendStatus(401)
 }
 
 declare global {
@@ -92,6 +92,9 @@ export class App {
     redisSubscriber: RedisEventSubscriber
     usageCacheManager: UsageCacheManager
     sessionStore: any
+    private httpServer?: http.Server
+    private ready = false
+    private shuttingDown = false
 
     constructor() {
         this.app = express()
@@ -183,6 +186,10 @@ export class App {
             logger.info('🎉 [server]: All initialization steps completed successfully!')
         } catch (error) {
             logger.error('❌ [server]: Error during Data Source initialization:', error)
+            // Do not let Render route traffic to a partially initialized replica. The start
+            // command already owns the failure/exit path, so propagating here is fail-safe and
+            // has no effect on successfully initialized deployments.
+            throw error
         }
     }
 
@@ -211,6 +218,13 @@ export class App {
         }
 
         this.app.set('trust proxy', trustProxy)
+
+        // Additive, unauthenticated readiness endpoint for the platform health check. `/ping`
+        // intentionally keeps its historical response for existing API consumers.
+        this.app.get('/api/v1/ready', async (_req, res) => {
+            const isReady = await this.isReady()
+            return res.status(isReady ? 200 : 503).json({ status: isReady ? 'ready' : 'not_ready' })
+        })
 
         // Allow access from specified domains
         validateCorsConfig()
@@ -376,21 +390,74 @@ export class App {
         this.app.use(errorHandlerMiddleware)
     }
 
-    async stopApp() {
-        try {
-            this.sseStreamer.stopHeartbeat()
-            // Drain open SSE streams BEFORE tearing down the Redis subscriber and exiting, so
-            // in-flight clients receive a terminal event + socket close on scale-in/redeploy
-            // instead of a frozen connection (which leaves API consumers hanging for `end`).
-            // Shutdown-only; no effect on normal streaming. Clients recover the final result by chatId.
-            const drainedStreams = this.sseStreamer.closeAllClients()
-            if (drainedStreams > 0) {
-                logger.info(`👋 [server]: Drained ${drainedStreams} open SSE stream(s) before shutdown`)
+    setHttpServer(server: http.Server) {
+        this.httpServer = server
+    }
+
+    async markReady() {
+        if (!this.AppDataSource.isInitialized) throw new Error('Cannot mark server ready before the database is initialized')
+        if (process.env.MODE === MODE.QUEUE) {
+            if (!this.queueManager || !this.redisSubscriber?.isReady() || !(await this.queueManager.isReady())) {
+                throw new Error('Cannot mark server ready before Redis queues and event subscribers are connected')
             }
+        }
+        this.ready = true
+    }
+
+    async isReady(): Promise<boolean> {
+        // Runtime dependency reconnects are handled by their clients and must not make every
+        // replica fail Render's health check during one shared Redis/DB incident. Readiness is
+        // established only after all dependencies connect successfully in markReady(), and flips
+        // false before scale-in so the load balancer can drain this replica.
+        return this.ready && !this.shuttingDown && this.AppDataSource.isInitialized
+    }
+
+    private closeHttpServer(): Promise<void> {
+        if (!this.httpServer?.listening) return Promise.resolve()
+        return new Promise((resolve) => {
+            this.httpServer?.close((error) => {
+                if (error) logger.warn(`⚠️ [server]: HTTP server close reported: ${error.message}`)
+                resolve()
+            })
+            this.httpServer?.closeIdleConnections?.()
+        })
+    }
+
+    async stopApp() {
+        this.shuttingDown = true
+        this.ready = false
+        try {
+            // Stop accepting new connections first and allow existing REST/SSE consumers to finish.
+            // Keep a small cleanup reserve inside the BaseCommand shutdown budget.
+            const configuredTimeout = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS || '', 10)
+            const shutdownTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 30000
+            const drainTimeoutMs = Math.max(shutdownTimeoutMs - 5000, 1000)
+            const activeStreams = this.sseStreamer.getClientCount()
+            if (activeStreams > 0) {
+                logger.info(`👋 [server]: Waiting up to ${drainTimeoutMs}ms for ${activeStreams} active SSE stream(s) to finish`)
+            }
+            const serverClosed = this.closeHttpServer()
+            const drainTimedOut = await Promise.race([
+                serverClosed.then(() => false),
+                new Promise<boolean>((resolve) => setTimeout(() => resolve(true), drainTimeoutMs))
+            ])
+
+            if (drainTimedOut) {
+                const drainedStreams = this.sseStreamer.closeAllClients()
+                if (drainedStreams > 0) {
+                    logger.warn(
+                        `👋 [server]: Graceful drain timed out after ${drainTimeoutMs}ms; closed ${drainedStreams} retryable SSE stream(s)`
+                    )
+                }
+                await Promise.race([serverClosed, new Promise<void>((resolve) => setTimeout(resolve, 1000))])
+            }
+
+            this.sseStreamer.stopHeartbeat()
             const removePromises: any[] = []
             removePromises.push(this.telemetry.flush())
             if (this.queueManager) {
                 removePromises.push(this.redisSubscriber.disconnect())
+                removePromises.push(this.queueManager.close())
             }
             await Promise.all(removePromises)
         } catch (e) {
@@ -410,6 +477,8 @@ export async function start(): Promise<void> {
 
     await serverApp.initDatabase()
     await serverApp.config()
+    serverApp.setHttpServer(server)
+    await serverApp.markReady()
 
     server.listen(port, host, () => {
         logger.info(`⚡️ [server]: Flowise Server is listening at ${host ? 'http://' + host : ''}:${port}`)

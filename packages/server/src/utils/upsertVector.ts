@@ -13,6 +13,7 @@ import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { ChatType, IExecuteFlowParams, IncomingInput, INodeDirectedGraph, IReactFlowObject, MODE } from '../Interface'
 import { FLOWISE_COUNTER_STATUS, FLOWISE_METRIC_COUNTERS } from '../Interface.Metrics'
+import { resilientWaitUntilFinished } from '../queue/waitUtils'
 import { ChatFlow } from '../database/entities/ChatFlow'
 import { UpsertHistory } from '../database/entities/UpsertHistory'
 import { Variable } from '../database/entities/Variable'
@@ -311,7 +312,9 @@ export const upsertVector = async (req: Request, isInternal: boolean = false) =>
             logger.debug(`[server]: [${orgId}]: Job added to queue: ${job.id}`)
 
             const queueEvents = upsertQueue.getQueueEvents()
-            const result = await job.waitUntilFinished(queueEvents)
+            const result = await resilientWaitUntilFinished(upsertQueue.getQueue(), job, queueEvents, {
+                label: `upsert-vector:${job.id}`
+            })
 
             if (!result) {
                 throw new Error('Job execution failed')

@@ -42,6 +42,10 @@ export abstract class BaseQueue {
     protected queueEvents: QueueEvents
     protected connection: RedisOptions
     private worker: Worker
+    private queueEventsStopping = false
+    private queueEventsTask: Promise<void>
+    private queueEventsRetryTimer?: NodeJS.Timeout
+    private resolveQueueEventsRetry?: () => void
 
     constructor(queueName: string, connection: RedisOptions) {
         this.connection = connection
@@ -49,7 +53,7 @@ export abstract class BaseQueue {
             connection: this.connection,
             streams: { events: { maxLen: QUEUE_REDIS_EVENT_STREAM_MAX_LEN } }
         })
-        this.queueEvents = new QueueEvents(queueName, { connection: this.connection })
+        this.queueEvents = new QueueEvents(queueName, { connection: this.connection, autorun: false })
 
         // The QueueEvents stream connection (used by job.waitUntilFinished) can drop when Redis
         // restarts. Without an 'error' listener these surface as unhandled errors; logging them
@@ -58,6 +62,44 @@ export abstract class BaseQueue {
         this.queueEvents.on('error', (err) => {
             logger.error(`[BaseQueue] QueueEvents error for queue "${queueName}": ${stringifyError(err)}`)
         })
+        this.queueEvents.on('ioredis:close', () => {
+            logger.warn(`[BaseQueue] QueueEvents Redis connection closed for queue "${queueName}"; waiting for reconnect`)
+        })
+        this.queueEventsTask = this.consumeQueueEventsWithRestart(queueName)
+    }
+
+    private async consumeQueueEventsWithRestart(queueName: string): Promise<void> {
+        let restartAttempt = 0
+        while (!this.queueEventsStopping) {
+            try {
+                await this.queueEvents.run()
+                restartAttempt = 0
+                if (!this.queueEventsStopping) {
+                    logger.warn(`[BaseQueue] QueueEvents consumer stopped unexpectedly for queue "${queueName}"; restarting`)
+                }
+            } catch (error) {
+                if (!this.queueEventsStopping) {
+                    restartAttempt += 1
+                    logger.error(
+                        `[BaseQueue] QueueEvents consumer failed for queue "${queueName}" (restart attempt ${restartAttempt}): ${stringifyError(
+                            error
+                        )}`
+                    )
+                }
+            }
+
+            if (!this.queueEventsStopping) {
+                const retryDelayMs = Math.min(1000 * 2 ** Math.min(Math.max(restartAttempt - 1, 0), 5), 30000)
+                await new Promise<void>((resolve) => {
+                    this.resolveQueueEventsRetry = resolve
+                    this.queueEventsRetryTimer = setTimeout(() => {
+                        this.queueEventsRetryTimer = undefined
+                        this.resolveQueueEventsRetry = undefined
+                        resolve()
+                    }, retryDelayMs)
+                })
+            }
+        }
     }
 
     abstract processJob(data: any): Promise<any>
@@ -175,6 +217,25 @@ export abstract class BaseQueue {
 
     public getQueueEvents(): QueueEvents {
         return this.queueEvents
+    }
+
+    public async isReady(): Promise<boolean> {
+        try {
+            const [queueClient, eventsClient] = await Promise.all([this.queue.client, this.queueEvents.client])
+            return queueClient.status === 'ready' && eventsClient.status === 'ready' && !this.queueEventsStopping
+        } catch {
+            return false
+        }
+    }
+
+    public async close(): Promise<void> {
+        this.queueEventsStopping = true
+        if (this.queueEventsRetryTimer) clearTimeout(this.queueEventsRetryTimer)
+        this.resolveQueueEventsRetry?.()
+        this.queueEventsRetryTimer = undefined
+        this.resolveQueueEventsRetry = undefined
+        await Promise.allSettled([this.queueEvents.close(), this.queue.close()])
+        await this.queueEventsTask
     }
 
     public async clearQueue(): Promise<void> {

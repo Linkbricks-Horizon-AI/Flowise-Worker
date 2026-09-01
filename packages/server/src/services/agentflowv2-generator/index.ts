@@ -10,6 +10,7 @@ import { sysPrompt } from './prompt'
 import { databaseEntities } from '../../utils'
 import logger from '../../utils/logger'
 import { MODE } from '../../Interface'
+import { resilientWaitUntilFinished } from '../../queue/waitUtils'
 
 // Define the Zod schema for Agentflowv2 data structure
 const NodeType = z.object({
@@ -210,7 +211,9 @@ const generateAgentflowv2 = async (question: string, selectedChatModel: Record<s
             })
             logger.debug(`[server]: Generated Agentflowv2 Job added to queue: ${job.id}`)
             const queueEvents = predictionQueue.getQueueEvents()
-            response = await job.waitUntilFinished(queueEvents)
+            response = await resilientWaitUntilFinished(predictionQueue.getQueue(), job, queueEvents, {
+                label: `agentflow-generator:${job.id}`
+            })
         } else {
             response = await generateAgentflowv2_json(
                 { prompt, componentNodes: getRunningExpressApp().nodesPool.componentNodes, toolNodes, selectedChatModel },
