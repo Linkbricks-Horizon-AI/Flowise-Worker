@@ -1100,16 +1100,9 @@ export const utilBuildChatflow = async (
             // the completion event can be missed and a plain waitUntilFinished would hang forever,
             // leaving the SSE request stuck in an infinite loading state. This polls the job's
             // actual state on timeout so a missed event is recovered instead of hanging.
-            const queueWaitStartedAt = Date.now()
-            logger.debug(`[predictionLifecycle] prediction:${chatId}: queue wait started (jobId=${job.id})`)
             const result = await resilientWaitUntilFinished(predictionQueue.getQueue(), job, queueEvents, {
                 label: `prediction:${chatId}`
             })
-            logger.debug(
-                `[predictionLifecycle] prediction:${chatId}: queue wait completed after ${Date.now() - queueWaitStartedAt}ms (jobId=${
-                    job.id
-                })`
-            )
             appServer.abortControllerPool.remove(abortControllerId)
             if (!result) {
                 throw new Error('Job execution failed')
