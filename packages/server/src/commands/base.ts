@@ -11,6 +11,8 @@ enum EXIT_CODE {
 }
 
 export abstract class BaseCommand extends Command {
+    private terminating = false
+
     static flags = {
         // General Settings
         FLOWISE_FILE_SIZE_LIMIT: Flags.string(),
@@ -88,6 +90,10 @@ export abstract class BaseCommand extends Command {
         // Queue
         MODE: Flags.string(),
         WORKER_CONCURRENCY: Flags.string(),
+        PREDICTION_WORKER_CONCURRENCY: Flags.string(),
+        UPSERT_WORKER_CONCURRENCY: Flags.string(),
+        SCHEDULE_WORKER_CONCURRENCY: Flags.string(),
+        GRACEFUL_SHUTDOWN_TIMEOUT_MS: Flags.string(),
         QUEUE_NAME: Flags.string(),
         QUEUE_REDIS_EVENT_STREAM_MAX_LEN: Flags.string(),
         REMOVE_ON_AGE: Flags.string(),
@@ -177,16 +183,25 @@ export abstract class BaseCommand extends Command {
 
     protected onTerminate() {
         return async () => {
+            if (this.terminating) return
+            this.terminating = true
+
+            const configuredTimeout = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS || '', 10)
+            const shutdownTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 30000
+            let forceShutdownTimer: NodeJS.Timeout | undefined
             try {
                 // Shut down the app after timeout if it ever stuck removing pools
-                setTimeout(async () => {
-                    logger.info('Flowise was forced to shut down after 30 secs')
+                forceShutdownTimer = setTimeout(async () => {
+                    logger.info(`Flowise was forced to shut down after ${shutdownTimeoutMs}ms`)
                     await this.failExit()
-                }, 30000)
+                }, shutdownTimeoutMs)
 
                 await this.stopProcess()
             } catch (error) {
                 logger.error('There was an error shutting down Flowise...', error)
+                await this.failExit()
+            } finally {
+                if (forceShutdownTimer) clearTimeout(forceShutdownTimer)
             }
         }
     }

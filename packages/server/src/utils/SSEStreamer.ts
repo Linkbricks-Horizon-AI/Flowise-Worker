@@ -23,6 +23,10 @@ export class SSEStreamer implements IServerSideEventStreamer {
         return this.clients.has(chatId)
     }
 
+    getClientCount(): number {
+        return this.clients.size
+    }
+
     /**
      * True when there's either a real client or at least one active observer for this chatId.
      */

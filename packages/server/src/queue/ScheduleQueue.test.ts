@@ -19,7 +19,12 @@ const mockRedisPublisher = { connect: jest.fn().mockResolvedValue(undefined) }
 
 jest.mock('bullmq', () => ({
     Queue: jest.fn().mockImplementation(() => mockBullQueue),
-    QueueEvents: jest.fn().mockImplementation(() => ({ on: jest.fn() })),
+    QueueEvents: jest.fn().mockImplementation(() => ({
+        on: jest.fn(),
+        run: jest.fn().mockImplementation(() => new Promise(() => undefined)),
+        close: jest.fn().mockResolvedValue(undefined),
+        client: Promise.resolve({ status: 'ready' })
+    })),
     Worker: jest.fn().mockImplementation(() => ({}))
 }))
 jest.mock('./RedisEventPublisher', () => ({

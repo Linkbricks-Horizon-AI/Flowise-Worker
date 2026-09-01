@@ -5,10 +5,11 @@ import { getDataSource } from '../DataSource'
 import { Telemetry } from '../utils/telemetry'
 import { NodesPool } from '../NodesPool'
 import { CachePool } from '../CachePool'
-import { QueueEvents, QueueEventsListener } from 'bullmq'
+import { QueueEventsListener } from 'bullmq'
 import { AbortControllerPool } from '../AbortControllerPool'
 import { UsageCacheManager } from '../UsageCacheManager'
 import { IdentityManager } from '../IdentityManager'
+import { getWorkerConcurrency } from '../queue/workerConcurrency'
 
 interface CustomListener extends QueueEventsListener {
     abort: (args: { id: string }, id: string) => void
@@ -38,12 +39,12 @@ export default class Worker extends BaseCommand {
 
         /** Prediction */
         const predictionQueue = queueManager.getQueue('prediction')
-        const predictionWorker = predictionQueue.createWorker()
+        const predictionConcurrency = getWorkerConcurrency('prediction')
+        const predictionWorker = predictionQueue.createWorker(predictionConcurrency)
         this.predictionWorkerId = predictionWorker.id
-        logger.info(`Prediction Worker ${this.predictionWorkerId} created`)
+        logger.info(`Prediction Worker ${this.predictionWorkerId} created (concurrency=${predictionConcurrency})`)
 
-        const predictionQueueName = predictionQueue.getQueueName()
-        const queueEvents = new QueueEvents(predictionQueueName, { connection: queueManager.getConnection() })
+        const queueEvents = predictionQueue.getQueueEvents()
 
         queueEvents.on<CustomListener>('abort', async ({ id }: { id: string }) => {
             // Two id namespaces, non-overlapping: a per-execution relayExecutionId (uuid) → exact abort,
@@ -57,15 +58,17 @@ export default class Worker extends BaseCommand {
 
         /** Upsertion */
         const upsertionQueue = queueManager.getQueue('upsert')
-        const upsertionWorker = upsertionQueue.createWorker()
+        const upsertConcurrency = getWorkerConcurrency('upsert')
+        const upsertionWorker = upsertionQueue.createWorker(upsertConcurrency)
         this.upsertionWorkerId = upsertionWorker.id
-        logger.info(`Upsertion Worker ${this.upsertionWorkerId} created`)
+        logger.info(`Upsertion Worker ${this.upsertionWorkerId} created (concurrency=${upsertConcurrency})`)
 
         /** Schedule */
         const scheduleQueue = queueManager.getQueue('schedule')
-        const scheduleWorker = scheduleQueue.createWorker()
+        const scheduleConcurrency = getWorkerConcurrency('schedule')
+        const scheduleWorker = scheduleQueue.createWorker(scheduleConcurrency)
         this.scheduleWorkerId = scheduleWorker.id
-        logger.info(`Schedule Worker ${this.scheduleWorkerId} created`)
+        logger.info(`Schedule Worker ${this.scheduleWorkerId} created (concurrency=${scheduleConcurrency})`)
 
         // Keep the process running
         process.stdin.resume()
@@ -120,15 +123,16 @@ export default class Worker extends BaseCommand {
             const queueManager = QueueManager.getInstance()
             const predictionWorker = queueManager.getQueue('prediction').getWorker()
             logger.info(`Shutting down Flowise Prediction Worker ${this.predictionWorkerId}...`)
-            await predictionWorker.close()
-
             const upsertWorker = queueManager.getQueue('upsert').getWorker()
             logger.info(`Shutting down Flowise Upsertion Worker ${this.upsertionWorkerId}...`)
-            await upsertWorker.close()
-
             const scheduleWorker = queueManager.getQueue('schedule').getWorker()
             logger.info(`Shutting down Flowise Schedule Worker ${this.scheduleWorkerId}...`)
-            await scheduleWorker.close()
+
+            // Stop all workers from fetching new jobs at the same time, then wait for active jobs
+            // in parallel. No job/tool timeout is introduced here; the process-level shutdown
+            // budget remains the deployment safety net.
+            await Promise.all([predictionWorker.close(false), upsertWorker.close(false), scheduleWorker.close(false)])
+            await queueManager.close()
         } catch (error) {
             logger.error('There was an error shutting down Flowise Worker...', error)
             await this.failExit()

@@ -88,6 +88,10 @@ export class RedisEventSubscriber {
         return this.subscribedChannels.size
     }
 
+    isReady(): boolean {
+        return this.redisSubscriber.isOpen && this.redisSubscriber.isReady
+    }
+
     startPeriodicCleanup(intervalMs: number = 60_000) {
         this.cleanupInterval = setInterval(() => {
             const staleChannels = Array.from(this.subscribedChannels).filter((channel) => !this.sseStreamer.hasClientOrObserver(channel))

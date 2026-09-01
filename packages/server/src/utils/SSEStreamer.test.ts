@@ -23,10 +23,12 @@ describe('SSEStreamer.closeAllClients (graceful shutdown drain)', () => {
         const b = mockRes()
         s.addClient('chatA', a)
         s.addExternalClient('chatB', b)
+        expect(s.getClientCount()).toBe(2)
 
         const drained = s.closeAllClients()
 
         expect(drained).toBe(2)
+        expect(s.getClientCount()).toBe(0)
         expect(s.hasClient('chatA')).toBe(false)
         expect(s.hasClient('chatB')).toBe(false)
         expect(a.writes.join('')).toContain('"event":"error"')

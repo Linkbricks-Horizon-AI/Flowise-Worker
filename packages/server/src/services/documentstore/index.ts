@@ -40,6 +40,7 @@ import {
     MODE
 } from '../../Interface'
 import { UsageCacheManager } from '../../UsageCacheManager'
+import { resilientWaitUntilFinished } from '../../queue/waitUtils'
 import { ChatFlow } from '../../database/entities/ChatFlow'
 import { DocumentStore } from '../../database/entities/DocumentStore'
 import { DocumentStoreFileChunk } from '../../database/entities/DocumentStoreFileChunk'
@@ -702,7 +703,9 @@ const previewChunksMiddleware = async (
             logger.debug(`[server]: [${orgId}]: Job added to queue: ${job.id}`)
 
             const queueEvents = upsertQueue.getQueueEvents()
-            const result = await job.waitUntilFinished(queueEvents)
+            const result = await resilientWaitUntilFinished(upsertQueue.getQueue(), job, queueEvents, {
+                label: `document-store:${job.id}`
+            })
 
             if (!result) {
                 throw new Error('Job execution failed')
@@ -916,7 +919,9 @@ const processLoaderMiddleware = async (
             }
 
             const queueEvents = upsertQueue.getQueueEvents()
-            const result = await job.waitUntilFinished(queueEvents)
+            const result = await resilientWaitUntilFinished(upsertQueue.getQueue(), job, queueEvents, {
+                label: `document-store:${job.id}`
+            })
 
             if (!result) {
                 throw new Error('Job execution failed')
@@ -1329,7 +1334,9 @@ const insertIntoVectorStoreMiddleware = async (
             logger.debug(`[server]: [${orgId}]: Job added to queue: ${job.id}`)
 
             const queueEvents = upsertQueue.getQueueEvents()
-            const result = await job.waitUntilFinished(queueEvents)
+            const result = await resilientWaitUntilFinished(upsertQueue.getQueue(), job, queueEvents, {
+                label: `document-store:${job.id}`
+            })
 
             if (!result) {
                 throw new Error('Job execution failed')
@@ -2060,7 +2067,9 @@ const upsertDocStoreMiddleware = async (
             logger.debug(`[server]: [${orgId}]: Job added to queue: ${job.id}`)
 
             const queueEvents = upsertQueue.getQueueEvents()
-            const result = await job.waitUntilFinished(queueEvents)
+            const result = await resilientWaitUntilFinished(upsertQueue.getQueue(), job, queueEvents, {
+                label: `document-store:${job.id}`
+            })
 
             if (!result) {
                 throw new Error('Job execution failed')
@@ -2135,7 +2144,9 @@ const refreshDocStoreMiddleware = async (
             logger.debug(`[server]: [${orgId}]: Job added to queue: ${job.id}`)
 
             const queueEvents = upsertQueue.getQueueEvents()
-            const result = await job.waitUntilFinished(queueEvents)
+            const result = await resilientWaitUntilFinished(upsertQueue.getQueue(), job, queueEvents, {
+                label: `document-store:${job.id}`
+            })
 
             if (!result) {
                 throw new Error('Job execution failed')
