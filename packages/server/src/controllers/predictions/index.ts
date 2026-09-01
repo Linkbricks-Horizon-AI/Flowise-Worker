@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { getErrorMessage } from '../../errors/utils'
 import { MODE } from '../../Interface'
 import chatMessagesService from '../../services/chat-messages'
+import { finalizeSseResponse } from '../../queue/finalizeSseResponse'
 
 // Send input message and get prediction result (External)
 const createPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -97,10 +98,11 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                     }
                     next(error)
                 } finally {
-                    if (isQueueMode && chatId) {
-                        await getRunningExpressApp().redisSubscriber.unsubscribe(chatId)
-                    }
-                    sseStreamer.removeClient(chatId)
+                    finalizeSseResponse({
+                        transportKey: chatId,
+                        sseStreamer,
+                        redisSubscriber: isQueueMode ? getRunningExpressApp().redisSubscriber : undefined
+                    })
                 }
             } else {
                 const apiResponse = await predictionsServices.buildChatflow(req)

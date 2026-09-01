@@ -135,6 +135,13 @@ export abstract class BaseQueue {
                 logger.error(`[BaseQueue] Worker job ${job?.id} failed in queue "${this.queue.name}": ${stringifyError(err)}`)
             })
 
+            // This event is emitted only after BullMQ has successfully moved the job to
+            // its completed set. Keep the existing processor log for compatibility and
+            // add this authoritative transition marker for incident diagnosis.
+            this.worker.on('completed', (job) => {
+                logger.info(`[BaseQueue] BullMQ completed transition confirmed for job ${job.id} in ${this.queue.name}`)
+            })
+
             this.worker.on('stalled', (jobId) => {
                 logger.warn(`[BaseQueue] Worker job ${jobId} stalled in queue "${this.queue.name}"`)
             })

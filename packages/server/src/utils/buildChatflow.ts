@@ -64,7 +64,7 @@ import { resolveFollowUpPrompts } from './followUpPrompts'
 import { validateFlowAPIKey } from './validateKey'
 import logger from './logger'
 import { utilAddChatMessage } from './addChatMesage'
-import { checkPredictions, checkStorage, updatePredictionsUsage, updateStorageUsage } from './quotaUsage'
+import { checkPredictions, checkStorage, updatePredictionsUsageWithTimeout, updateStorageUsage } from './quotaUsage'
 import { buildAgentGraph } from './buildAgentGraph'
 import { getErrorMessage } from '../errors/utils'
 import { FLOWISE_METRIC_COUNTERS, FLOWISE_COUNTER_STATUS, IMetricsProvider } from '../Interface.Metrics'
@@ -1087,14 +1087,23 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
             // the completion event can be missed and a plain waitUntilFinished would hang forever,
             // leaving the SSE request stuck in an infinite loading state. This polls the job's
             // actual state on timeout so a missed event is recovered instead of hanging.
+            const queueWaitStartedAt = Date.now()
+            logger.debug(`[predictionLifecycle] prediction:${chatId}: queue wait started (jobId=${job.id})`)
             const result = await resilientWaitUntilFinished(predictionQueue.getQueue(), job, queueEvents, {
                 label: `prediction:${chatId}`
             })
+            logger.debug(
+                `[predictionLifecycle] prediction:${chatId}: queue wait completed after ${Date.now() - queueWaitStartedAt}ms (jobId=${
+                    job.id
+                })`
+            )
             appServer.abortControllerPool.remove(abortControllerId)
             if (!result) {
                 throw new Error('Job execution failed')
             }
-            await updatePredictionsUsage(orgId, subscriptionId, workspaceId, appServer.usageCacheManager)
+            await updatePredictionsUsageWithTimeout(orgId, subscriptionId, workspaceId, appServer.usageCacheManager, {
+                label: `prediction:${chatId}`
+            })
             incrementSuccessMetricCounter(appServer.metricsProvider, isInternal, isAgentFlow)
             return result
         } else {
@@ -1106,7 +1115,9 @@ export const utilBuildChatflow = async (req: Request, isInternal: boolean = fals
             const result = await executeFlow(executeData)
 
             appServer.abortControllerPool.remove(abortControllerId)
-            await updatePredictionsUsage(orgId, subscriptionId, workspaceId, appServer.usageCacheManager)
+            await updatePredictionsUsageWithTimeout(orgId, subscriptionId, workspaceId, appServer.usageCacheManager, {
+                label: `prediction:${chatId}`
+            })
             incrementSuccessMetricCounter(appServer.metricsProvider, isInternal, isAgentFlow)
             return result
         }

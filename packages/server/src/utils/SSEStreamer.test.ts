@@ -86,3 +86,17 @@ describe('SSEStreamer.closeAllClients (graceful shutdown drain)', () => {
         expect(s.hasClientOrObserver('src')).toBe(false)
     })
 })
+
+describe('SSEStreamer.removeClient (successful completion contract)', () => {
+    it('emits the existing end/[DONE] frame and closes the response', () => {
+        const s = new SSEStreamer()
+        const res = mockRes()
+        s.addExternalClient('chatA', res)
+
+        s.removeClient('chatA')
+
+        expect(res.writes).toEqual(['message:\ndata:{"event":"end","data":"[DONE]"}\n\n'])
+        expect(res.ended).toBe(true)
+        expect(s.hasClient('chatA')).toBe(false)
+    })
+})

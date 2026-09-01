@@ -8,6 +8,7 @@ import { utilBuildChatflow } from '../../utils/buildChatflow'
 import { getRunningExpressApp } from '../../utils/getRunningExpressApp'
 import chatMessagesService from '../../services/chat-messages'
 import logger from '../../utils/logger'
+import { finalizeSseResponse } from '../../queue/finalizeSseResponse'
 
 // Send input message and get prediction result (Internal)
 const createInternalPrediction = async (req: Request, res: Response, next: NextFunction) => {
@@ -66,10 +67,11 @@ const createAndStreamInternalPrediction = async (req: Request, res: Response, ne
         }
         next(error)
     } finally {
-        if (isQueueMode && chatId) {
-            await getRunningExpressApp().redisSubscriber.unsubscribe(chatId)
-        }
-        sseStreamer.removeClient(chatId)
+        finalizeSseResponse({
+            transportKey: chatId,
+            sseStreamer,
+            redisSubscriber: isQueueMode ? getRunningExpressApp().redisSubscriber : undefined
+        })
     }
 }
 export default {
