@@ -985,16 +985,22 @@ export const utilBuildChatflow = async (
     req: Request,
     isInternal: boolean = false,
     chatType?: ChatType,
-    relayExecutionId?: string
+    relayExecutionId?: string,
+    preloadedChatflow?: ChatFlow
 ): Promise<any> => {
     const appServer = getRunningExpressApp()
 
     const chatflowid = req.params.id
 
-    // Check if chatflow exists
-    const chatflow = await appServer.AppDataSource.getRepository(ChatFlow).findOneBy({
-        id: chatflowid
-    })
+    // External prediction requests already load ChatFlow for origin/streaming checks. Reuse that
+    // request-scoped snapshot; internal, webhook, and MCP callers retain the existing lookup.
+    let chatflow: ChatFlow | null | undefined = preloadedChatflow
+    if (chatflow && chatflow.id !== chatflowid) chatflow = undefined
+    if (!preloadedChatflow) {
+        chatflow = await appServer.AppDataSource.getRepository(ChatFlow).findOneBy({
+            id: chatflowid
+        })
+    }
     if (!chatflow) {
         throw new InternalFlowiseError(StatusCodes.NOT_FOUND, `Chatflow ${chatflowid} not found`)
     }

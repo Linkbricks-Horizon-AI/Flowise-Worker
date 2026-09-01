@@ -47,13 +47,18 @@ export function validateChatflowType(type: ChatflowType | undefined) {
 }
 
 // Check if chatflow valid for streaming
-const checkIfChatflowIsValidForStreaming = async (chatflowId: string): Promise<any> => {
+const checkIfChatflowIsValidForStreaming = async (chatflowId: string, preloadedChatflow?: ChatFlow): Promise<any> => {
     try {
         const appServer = getRunningExpressApp()
-        //**
-        const chatflow = await appServer.AppDataSource.getRepository(ChatFlow).findOneBy({
-            id: chatflowId
-        })
+        // Prediction requests already load the full ChatFlow for origin validation. Reuse that
+        // request-scoped snapshot when supplied; standalone callers keep the existing DB lookup.
+        let chatflow: ChatFlow | null | undefined = preloadedChatflow
+        if (chatflow && chatflow.id !== chatflowId) chatflow = undefined
+        if (!preloadedChatflow) {
+            chatflow = await appServer.AppDataSource.getRepository(ChatFlow).findOneBy({
+                id: chatflowId
+            })
+        }
         if (!chatflow) {
             throw new InternalFlowiseError(StatusCodes.NOT_FOUND, `Chatflow ${chatflowId} not found`)
         }

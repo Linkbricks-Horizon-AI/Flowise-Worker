@@ -57,7 +57,7 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
             }
         }
         if (isDomainAllowed) {
-            const streamable = await chatflowsService.checkIfChatflowIsValidForStreaming(req.params.id)
+            const streamable = await chatflowsService.checkIfChatflowIsValidForStreaming(req.params.id, chatflow)
             const isStreamingRequested = req.body.streaming === 'true' || req.body.streaming === true
             if (streamable?.isStreaming && isStreamingRequested) {
                 const sseStreamer = getRunningExpressApp().sseStreamer
@@ -101,7 +101,7 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                         await getRunningExpressApp().redisSubscriber.subscribe(transportKey)
                     }
 
-                    const apiResponse = await predictionsServices.buildChatflow(req, undefined, relayExecutionId)
+                    const apiResponse = await predictionsServices.buildChatflow(req, undefined, relayExecutionId, chatflow)
                     // Metadata slot key MUST be the transport key (not apiResponse.chatId) or the final
                     // metadata frame (chatMessageId/followUpPrompts/action) lands in the wrong slot and
                     // is silently dropped. The payload still carries the semantic apiResponse.chatId.
@@ -119,7 +119,7 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                     })
                 }
             } else {
-                const apiResponse = await predictionsServices.buildChatflow(req)
+                const apiResponse = await predictionsServices.buildChatflow(req, undefined, undefined, chatflow)
                 return res.json(apiResponse)
             }
         } else {
