@@ -17,7 +17,7 @@ import { AnalyticHandler } from '../../../src/handler'
 import { DEFAULT_SUMMARIZER_TEMPLATE } from '../prompt'
 import { ILLMMessage, IResponseMetadata } from '../Interface.Agentflow'
 import { Tool } from '@langchain/core/tools'
-import { ARTIFACTS_PREFIX, SOURCE_DOCUMENTS_PREFIX, TOOL_ARGS_PREFIX } from '../../../src/agents'
+import { ARTIFACTS_PREFIX, SOURCE_DOCUMENTS_PREFIX, TOOL_ARGS_PREFIX, withToolAvailabilityMessage } from '../../../src/agents'
 import { flatten } from 'lodash'
 import { toolSchemaToJsonSchema, type ToolJsonSchema } from '../../../src/utils'
 import { getErrorMessage } from '../../../src/error'
@@ -700,12 +700,22 @@ class Agent_Agentflow implements INode {
             const modelName = modelConfig?.model ?? modelConfig?.modelName
 
             // Extract tools
-            const tools = nodeData.inputs?.agentTools as ITool[]
+            const tools = (nodeData.inputs?.agentTools as ITool[]) ?? []
 
             const toolsInstance: Tool[] = []
+            const toolNodeNames: string[] = []
             for (const tool of tools) {
-                const toolConfig = tool.agentSelectedToolConfig
-                const nodeInstanceFilePath = options.componentNodes[tool.agentSelectedTool].filePath as string
+                const toolConfig = tool.agentSelectedToolConfig ?? {}
+                const componentNode = options.componentNodes[tool.agentSelectedTool]
+                if (!componentNode) {
+                    const logger = options.logger ?? console
+                    logger.warn(
+                        '[Agent] Tool component not found; excluding it from the available tools. ' +
+                            JSON.stringify({ toolName: tool.agentSelectedTool, nodeId: nodeData.id, chatflowId: options.chatflowid })
+                    )
+                    continue
+                }
+                const nodeInstanceFilePath = componentNode.filePath as string
                 const nodeModule = await import(nodeInstanceFilePath)
                 const newToolNodeInstance = new nodeModule.nodeClass()
                 const newNodeData = {
@@ -717,32 +727,31 @@ class Agent_Agentflow implements INode {
                     }
                 }
                 const toolInstance = await newToolNodeInstance.init(newNodeData, '', options)
+                if (!toolInstance) continue
 
                 // toolInstance might returns a list of tools like MCP tools
                 if (Array.isArray(toolInstance)) {
                     for (const subTool of toolInstance) {
+                        if (!subTool) continue
                         const subToolInstance = subTool as Tool
                         ;(subToolInstance as any).agentSelectedTool = tool.agentSelectedTool
                         if (tool.agentSelectedToolRequiresHumanInput) {
                             ;(subToolInstance as any).requiresHumanInput = true
                         }
                         toolsInstance.push(subToolInstance)
+                        toolNodeNames.push(tool.agentSelectedTool)
                     }
                 } else {
                     if (tool.agentSelectedToolRequiresHumanInput) {
                         toolInstance.requiresHumanInput = true
                     }
                     toolsInstance.push(toolInstance as Tool)
+                    toolNodeNames.push(tool.agentSelectedTool)
                 }
             }
 
             const availableTools: ISimpliefiedTool[] = toolsInstance.map((tool, index) => {
-                const originalTool = tools[index]
-                let agentSelectedTool = (tool as any)?.agentSelectedTool
-                if (!agentSelectedTool) {
-                    agentSelectedTool = originalTool?.agentSelectedTool
-                }
-                const componentNode = options.componentNodes[agentSelectedTool]
+                const componentNode = options.componentNodes[toolNodeNames[index]]
 
                 const jsonSchema = toolSchemaToJsonSchema(tool.schema)
 
@@ -1002,7 +1011,7 @@ class Agent_Agentflow implements INode {
             }
 
             // Prepare messages array
-            const messages: BaseMessageLike[] = []
+            let messages: BaseMessageLike[] = []
 
             // Prepend history ONLY if it is the first node
             if (prependedChatHistory.length > 0 && !runtimeChatHistory.length) {
@@ -1064,6 +1073,8 @@ class Agent_Agentflow implements INode {
                 }
             }
             delete nodeData.inputs?.agentMessages
+
+            messages = withToolAvailabilityMessage(messages, toolsInstance.length > 0)
 
             // Initialize response and determine if streaming is possible
             let response: AIMessageChunk = new AIMessageChunk('')

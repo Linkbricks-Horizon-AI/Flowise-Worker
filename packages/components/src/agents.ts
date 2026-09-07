@@ -1,7 +1,15 @@
 import { flatten } from 'lodash'
 import { ChainValues } from '@langchain/core/utils/types'
 import { AgentStep, AgentAction } from '@langchain/core/agents'
-import { BaseMessage, FunctionMessage, AIMessage, isAIMessage } from '@langchain/core/messages'
+import {
+    BaseMessage,
+    BaseMessageLike,
+    FunctionMessage,
+    AIMessage,
+    SystemMessage,
+    coerceMessageLikeToMessage,
+    isAIMessage
+} from '@langchain/core/messages'
 import { ToolCall } from '@langchain/core/messages/tool'
 import { OutputParserException, BaseOutputParser, BaseLLMOutputParser } from '@langchain/core/output_parsers'
 import { BaseLanguageModel } from '@langchain/core/language_models/base'
@@ -29,6 +37,29 @@ import { getErrorMessage } from './error'
 export const SOURCE_DOCUMENTS_PREFIX = '\n\n----FLOWISE_SOURCE_DOCUMENTS----\n\n'
 export const ARTIFACTS_PREFIX = '\n\n----FLOWISE_ARTIFACTS----\n\n'
 export const TOOL_ARGS_PREFIX = '\n\n----FLOWISE_TOOL_ARGS----\n\n'
+
+const getToolAvailabilityMessage = (hasTools: boolean): string =>
+    (hasTools
+        ? 'Only the tools provided in this request are available. Tools mentioned in instructions or conversation history may be unavailable. '
+        : 'No tools are available in this request. General conversation is still available. ') +
+    'If a request requires an unavailable tool, explain that the feature is currently unavailable. ' +
+    'Never claim tool execution or results without a successful tool call. ' +
+    'Continue helping with tasks that can be completed using the available capabilities.'
+
+export const withToolAvailabilityMessage = (messages: BaseMessageLike[], hasTools: boolean): BaseMessageLike[] => {
+    const guidance = getToolAvailabilityMessage(hasTools)
+    const firstMessage = messages.length > 0 ? coerceMessageLikeToMessage(messages[0]) : undefined
+    // Anthropic and Gemini require a single leading system message. Preserve content
+    // blocks (including cache controls) and avoid mutating reusable prompts/history.
+    if (firstMessage?.type === 'system') {
+        const content =
+            typeof firstMessage.content === 'string'
+                ? `${firstMessage.content}\n\n${guidance}`
+                : [...firstMessage.content, { type: 'text' as const, text: guidance }]
+        return [new SystemMessage({ ...firstMessage, content }), ...messages.slice(1)]
+    }
+    return [new SystemMessage(guidance), ...messages]
+}
 
 /**
  * Utility function to format tool error messages with parameters for debugging

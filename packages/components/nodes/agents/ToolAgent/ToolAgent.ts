@@ -1,8 +1,9 @@
 import { flatten } from 'lodash'
 import { Tool } from '@langchain/core/tools'
 import { BaseMessage } from '@langchain/core/messages'
+import { ChatPromptValue } from '@langchain/core/prompt_values'
 import { ChainValues } from '@langchain/core/utils/types'
-import { RunnableSequence } from '@langchain/core/runnables'
+import { Runnable, RunnableSequence } from '@langchain/core/runnables'
 import { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { ChatPromptTemplate, MessagesPlaceholder, HumanMessagePromptTemplate, PromptTemplate } from '@langchain/core/prompts'
 import { formatToOpenAIToolMessages } from '@langchain/classic/agents/format_scratchpad/openai_tools'
@@ -16,7 +17,7 @@ import {
 } from '../../../src/utils'
 import { FlowiseMemory, ICommonObject, INode, INodeData, INodeParams, IServerSideEventStreamer, IUsedTool } from '../../../src/Interface'
 import { ConsoleCallbackHandler, CustomChainHandler, CustomStreamingHandler, additionalCallbacks } from '../../../src/handler'
-import { AgentExecutor, ToolCallingAgentOutputParser } from '../../../src/agents'
+import { AgentExecutor, ToolCallingAgentOutputParser, withToolAvailabilityMessage } from '../../../src/agents'
 import { Moderation, checkInputs, streamResponse } from '../../moderation/Moderation'
 import { formatResponse } from '../../outputparsers/OutputParserHelpers'
 import { addImagesToMessages, llmSupportsVision } from '../../../src/multiModalUtils'
@@ -331,11 +332,13 @@ const prepareAgent = async (
         }
     }
 
-    if (model.bindTools === undefined) {
-        throw new Error(`This agent requires that the "bindTools()" method be implemented on the input model.`)
+    let modelWithTools: Runnable = model
+    if (tools.length > 0) {
+        if (model.bindTools === undefined) {
+            throw new Error(`This agent requires that the "bindTools()" method be implemented on the input model.`)
+        }
+        modelWithTools = model.bindTools(tools)
     }
-
-    const modelWithTools = model.bindTools(tools)
 
     const runnableAgent = RunnableSequence.from([
         {
@@ -348,6 +351,7 @@ const prepareAgent = async (
             ...promptVariables
         },
         prompt,
+        (promptValue: ChatPromptValue) => withToolAvailabilityMessage(promptValue.toChatMessages(), tools.length > 0),
         modelWithTools,
         new ToolCallingAgentOutputParser()
     ])

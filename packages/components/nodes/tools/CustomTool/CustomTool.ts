@@ -108,6 +108,9 @@ class CustomTool_Tools implements INode {
         }
 
         const selectedToolId = nodeData.inputs?.selectedTool as string
+        if (typeof selectedToolId !== 'string' || !selectedToolId.trim()) {
+            throw new Error('Custom Tool requires a selected tool ID')
+        }
         const customToolFunc = nodeData.inputs?.customToolFunc as string
         const customToolName = nodeData.inputs?.customToolName as string
         const customToolDesc = nodeData.inputs?.customToolDesc as string
@@ -122,7 +125,16 @@ class CustomTool_Tools implements INode {
                 id: selectedToolId
             })
 
-            if (!tool) throw new Error(`Tool ${selectedToolId} not found`)
+            if (!tool) {
+                const logger = options.logger ?? console
+                logger.warn(
+                    '[CustomTool] Referenced tool not found; excluding it from the available tools. ' +
+                        JSON.stringify({ toolId: selectedToolId, nodeId: nodeData.id, chatflowId: options.chatflowid })
+                )
+                // Tool consumers already flatten toolkit results. An empty toolkit excludes this
+                // reference without introducing a null tool or hiding database/authorization errors.
+                return []
+            }
             const obj = {
                 name: tool.name,
                 description: tool.description,
