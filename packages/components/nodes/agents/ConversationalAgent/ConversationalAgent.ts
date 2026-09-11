@@ -12,6 +12,7 @@ import { getBaseClasses, transformBracesWithColon } from '../../../src/utils'
 import { ConsoleCallbackHandler, CustomChainHandler, additionalCallbacks } from '../../../src/handler'
 import { FlowiseMemory, ICommonObject, INode, INodeData, INodeParams, IUsedTool, IServerSideEventStreamer } from '../../../src/Interface'
 import { AgentExecutor } from '../../../src/agents'
+import { streamDirectToolReturn } from '../../../src/directToolReturn'
 import { addImagesToMessages, llmSupportsVision } from '../../../src/multiModalUtils'
 import { checkInputs, Moderation, streamResponse } from '../../moderation/Moderation'
 import { formatResponse } from '../../outputparsers/OutputParserHelpers'
@@ -149,17 +150,7 @@ class ConversationalAgent_Agents implements INode {
                 sseStreamer.streamUsedToolsEvent(options.chatId, res.usedTools)
                 usedTools = res.usedTools
             }
-            // If the tool is set to returnDirect, stream the output to the client
-            if (res.usedTools && res.usedTools.length) {
-                let inputTools = nodeData.inputs?.tools
-                inputTools = flatten(inputTools)
-                for (const tool of res.usedTools) {
-                    const inputTool = inputTools.find((inputTool: Tool) => inputTool.name === tool.tool)
-                    if (inputTool && inputTool.returnDirect && options.sseStreamer && !(tool as any).streamed) {
-                        sseStreamer.streamTokenEvent(options.chatId, tool.toolOutput)
-                    }
-                }
-            }
+            streamDirectToolReturn(res, sseStreamer, chatId)
             if (sseStreamer) {
                 sseStreamer.streamEndEvent(options.chatId)
             }

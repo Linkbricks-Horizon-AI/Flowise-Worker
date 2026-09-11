@@ -20,6 +20,7 @@ import {
 } from '../../../src/Interface'
 import { ConsoleCallbackHandler, CustomChainHandler, additionalCallbacks } from '../../../src/handler'
 import { AgentExecutor, XMLAgentOutputParser } from '../../../src/agents'
+import { streamDirectToolReturn } from '../../../src/directToolReturn'
 import { Moderation, checkInputs } from '../../moderation/Moderation'
 import { formatResponse } from '../../outputparsers/OutputParserHelpers'
 
@@ -161,19 +162,7 @@ class XMLAgent_Agents implements INode {
                 }
                 usedTools = res.usedTools
             }
-            // If the tool is set to returnDirect, stream the output to the client
-            if (res.usedTools && res.usedTools.length) {
-                let inputTools = nodeData.inputs?.tools
-                inputTools = flatten(inputTools)
-                for (const tool of res.usedTools) {
-                    const inputTool = inputTools.find((inputTool: Tool) => inputTool.name === tool.tool)
-                    if (inputTool && inputTool.returnDirect && !(tool as any).streamed) {
-                        if (sseStreamer) {
-                            sseStreamer.streamTokenEvent(chatId, tool.toolOutput)
-                        }
-                    }
-                }
-            }
+            streamDirectToolReturn(res, sseStreamer, chatId)
         } else {
             res = await executor.invoke({ input }, { callbacks: [loggerHandler, ...callbacks] })
             if (res.sourceDocuments) {

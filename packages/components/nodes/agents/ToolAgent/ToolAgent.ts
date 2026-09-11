@@ -1,5 +1,4 @@
 import { flatten } from 'lodash'
-import { Tool } from '@langchain/core/tools'
 import { BaseMessage } from '@langchain/core/messages'
 import { ChatPromptValue } from '@langchain/core/prompt_values'
 import { ChainValues } from '@langchain/core/utils/types'
@@ -18,6 +17,7 @@ import {
 import { FlowiseMemory, ICommonObject, INode, INodeData, INodeParams, IServerSideEventStreamer, IUsedTool } from '../../../src/Interface'
 import { ConsoleCallbackHandler, CustomChainHandler, CustomStreamingHandler, additionalCallbacks } from '../../../src/handler'
 import { AgentExecutor, ToolCallingAgentOutputParser, withToolAvailabilityMessage } from '../../../src/agents'
+import { streamDirectToolReturn } from '../../../src/directToolReturn'
 import { Moderation, checkInputs, streamResponse } from '../../moderation/Moderation'
 import { formatResponse } from '../../outputparsers/OutputParserHelpers'
 import { addImagesToMessages, llmSupportsVision } from '../../../src/multiModalUtils'
@@ -178,19 +178,7 @@ class ToolAgent_Agents implements INode {
                 }
                 artifacts = res.artifacts
             }
-            // If the tool is set to returnDirect, stream the output to the client
-            if (res.usedTools && res.usedTools.length) {
-                let inputTools = nodeData.inputs?.tools
-                inputTools = flatten(inputTools).filter((t: any) => t != null)
-                for (const tool of res.usedTools) {
-                    const inputTool = inputTools.find((inputTool: Tool) => inputTool.name === tool.tool)
-                    // Skip the bulk emit when the tool already streamed its output live (e.g. ChatflowTool
-                    // forwarding a child chatflow's tokens) — otherwise the answer would be sent twice.
-                    if (inputTool && inputTool.returnDirect && shouldStreamResponse && !(tool as any).streamed) {
-                        sseStreamer.streamTokenEvent(chatId, tool.toolOutput)
-                    }
-                }
-            }
+            streamDirectToolReturn(res, sseStreamer, chatId)
         } else {
             const allCallbacks = [loggerHandler, ...callbacks]
 

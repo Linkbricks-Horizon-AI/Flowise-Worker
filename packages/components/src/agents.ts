@@ -33,6 +33,7 @@ import {
 import { formatLogToString } from '@langchain/classic/agents/format_scratchpad/log'
 import { IUsedTool, IServerSideEventStreamer } from './Interface'
 import { getErrorMessage } from './error'
+import { withDirectToolReturn } from './directToolReturn'
 
 export const SOURCE_DOCUMENTS_PREFIX = '\n\n----FLOWISE_SOURCE_DOCUMENTS----\n\n'
 export const ARTIFACTS_PREFIX = '\n\n----FLOWISE_ARTIFACTS----\n\n'
@@ -407,17 +408,24 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
         const usedTools: IUsedTool[] = []
         let artifacts: any[] = []
 
-        const getOutput = async (finishStep: AgentFinish): Promise<AgentExecutorOutput> => {
+        const getOutput = async (finishStep: AgentFinish, returnDirect = false): Promise<AgentExecutorOutput> => {
             const { returnValues } = finishStep
             const additional = await this.agent.prepareForOutput(returnValues, steps)
             if (sourceDocuments.length) additional.sourceDocuments = flatten(sourceDocuments)
             if (usedTools.length) additional.usedTools = usedTools
             if (artifacts.length) additional.artifacts = flatten(artifacts)
-            if (this.returnIntermediateSteps) {
-                return { ...returnValues, intermediateSteps: steps, ...additional }
-            }
-            await runManager?.handleAgentEnd(finishStep)
-            return { ...returnValues, ...additional }
+            const output = this.returnIntermediateSteps
+                ? { ...returnValues, intermediateSteps: steps, ...additional }
+                : { ...returnValues, ...additional }
+            if (!this.returnIntermediateSteps) await runManager?.handleAgentEnd(finishStep)
+            // Preserve direct-return selection and tool execution semantics. Only
+            // this termination path may forward raw direct results after invoke.
+            return returnDirect
+                ? withDirectToolReturn(
+                      output,
+                      usedTools.filter((tool) => toolsByName[tool.tool?.toLowerCase()]?.returnDirect)
+                  )
+                : output
         }
 
         while (this.shouldContinue(iterations)) {
@@ -598,10 +606,13 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
             const lastTool = toolsByName[lastStep.action.tool?.toLowerCase()]
 
             if (lastTool?.returnDirect) {
-                return getOutput({
-                    returnValues: { [this.agent.returnValues[0]]: lastStep.observation },
-                    log: ''
-                })
+                return getOutput(
+                    {
+                        returnValues: { [this.agent.returnValues[0]]: lastStep.observation },
+                        log: ''
+                    },
+                    true
+                )
             }
 
             iterations += 1
