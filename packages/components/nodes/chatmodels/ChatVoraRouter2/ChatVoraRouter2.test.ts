@@ -1,3 +1,5 @@
+export {}
+
 jest.mock('../../../src/utils', () => ({
     getBaseClasses: jest.fn(() => ['BaseChatModel']),
     getCredentialData: jest.fn(),

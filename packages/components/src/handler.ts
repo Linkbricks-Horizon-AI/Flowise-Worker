@@ -26,6 +26,7 @@ import { LunaryHandler } from '@langchain/community/callbacks/handlers/lunary'
 
 import { getCredentialData, getCredentialParam, getEnvironmentVariable } from './utils'
 import { applyEnvTracingProviders, tracingEnvEnabled } from './tracingEnv'
+import { streamDirectToolReturn } from './directToolReturn'
 import { EvaluationRunTracer } from '../evaluation/EvaluationRunTracer'
 import { EvaluationRunTracerLlama } from '../evaluation/EvaluationRunTracerLlama'
 import { ICommonObject, IDatabaseEntity, INodeData, IServerSideEventStreamer } from './Interface'
@@ -406,19 +407,21 @@ export class CustomChainHandler extends BaseCallbackHandler {
             Callback Order is "Chain Start -> Chain End" for cached responses.
          */
         if (this.cachedResponse && parentRunId === undefined) {
-            const cachedValue = outputs.text || outputs.response || outputs.output || outputs.output_text
-            //split at whitespace, and keep the whitespace. This is to preserve the original formatting.
-            const result = cachedValue.split(/(\s+)/)
-            result.forEach((token: string, index: number) => {
-                if (index === 0) {
-                    if (this.sseStreamer) {
-                        this.sseStreamer.streamStartEvent(this.chatId, token)
+            if (!streamDirectToolReturn(outputs, this.sseStreamer, this.chatId, true)) {
+                const cachedValue = outputs.text || outputs.response || outputs.output || outputs.output_text
+                //split at whitespace, and keep the whitespace. This is to preserve the original formatting.
+                const result = cachedValue.split(/(\s+)/)
+                result.forEach((token: string, index: number) => {
+                    if (index === 0) {
+                        if (this.sseStreamer) {
+                            this.sseStreamer.streamStartEvent(this.chatId, token)
+                        }
                     }
-                }
-                if (this.sseStreamer) {
-                    this.sseStreamer.streamTokenEvent(this.chatId, token)
-                }
-            })
+                    if (this.sseStreamer) {
+                        this.sseStreamer.streamTokenEvent(this.chatId, token)
+                    }
+                })
+            }
             if (this.returnSourceDocuments && this.sseStreamer) {
                 this.sseStreamer.streamSourceDocumentsEvent(this.chatId, outputs?.sourceDocuments)
             }
