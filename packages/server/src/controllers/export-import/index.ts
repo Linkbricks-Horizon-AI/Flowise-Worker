@@ -1,7 +1,11 @@
 import { NextFunction, Request, Response } from 'express'
 import { StatusCodes } from 'http-status-codes'
+import { Readable } from 'stream'
+import { pipeline } from 'stream/promises'
 import { InternalFlowiseError } from '../../errors/internalFlowiseError'
 import exportImportService from '../../services/export-import'
+import { createExportDownload } from '../../services/export-import/download'
+import logger from '../../utils/logger'
 
 const exportData = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -12,9 +16,23 @@ const exportData = async (req: Request, res: Response, next: NextFunction) => {
                 `Error: exportImportController.exportData - workspace ${workspaceId} not found!`
             )
         }
-        const apiResponse = await exportImportService.exportData(exportImportService.convertExportInput(req.body), workspaceId)
+        const input = exportImportService.convertExportInput(req.body)
+        if (req.query.download === 'true') {
+            const download = createExportDownload(input, workspaceId)
+            res.setHeader('Content-Type', 'application/json; charset=utf-8')
+            res.setHeader('Content-Disposition', 'attachment; filename="ExportData.json"')
+            res.setHeader('Cache-Control', 'no-store')
+            await pipeline(Readable.from(download), res)
+            return
+        }
+        const apiResponse = await exportImportService.exportData(input, workspaceId)
         return res.json(apiResponse)
     } catch (error) {
+        if (res.headersSent || res.destroyed) {
+            logger.error('Workspace export download failed', { error })
+            res.destroy(error instanceof Error ? error : new Error('Export failed'))
+            return
+        }
         next(error)
     }
 }
