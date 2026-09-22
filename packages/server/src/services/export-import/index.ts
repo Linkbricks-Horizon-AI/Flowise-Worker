@@ -29,7 +29,7 @@ import variableService from '../variables'
 import { ChatMessageRatingType, ChatType, Platform } from '../../Interface'
 import { sanitizeNullBytes } from '../../utils/sanitize.util'
 
-type ExportInput = {
+export type ExportInput = {
     agentflow: boolean
     agentflowv2: boolean
     assistantCustom: boolean

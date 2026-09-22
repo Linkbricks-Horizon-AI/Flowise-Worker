@@ -5,7 +5,6 @@ import { useDispatch, useSelector } from 'react-redux'
 import { useNavigate } from 'react-router-dom'
 
 import { closeSnackbar as closeSnackbarAction, enqueueSnackbar as enqueueSnackbarAction, REMOVE_DIRTY } from '@/store/actions'
-import { exportData, stringify } from '@/utils/exportImport'
 import useNotifier from '@/utils/useNotifier'
 
 // material-ui
@@ -52,6 +51,7 @@ import exportImportApi from '@/api/exportimport'
 
 // Hooks
 import useApi from '@/hooks/useApi'
+import { useError } from '@/store/context/ErrorContext'
 import { getErrorMessage } from '@/utils/errorHandler'
 
 const dataToExport = [
@@ -229,7 +229,7 @@ const ProfileSection = ({ handleLogout }) => {
     const isAuthenticated = useSelector((state) => state.auth.isAuthenticated)
 
     const importAllApi = useApi(exportImportApi.importData)
-    const exportAllApi = useApi(exportImportApi.exportData)
+    const { handleError } = useError()
     const prevOpen = useRef(open)
 
     // ==============================|| Snackbar ||============================== //
@@ -304,7 +304,7 @@ const ProfileSection = ({ handleLogout }) => {
         inputRef.current.click()
     }
 
-    const onExport = (data) => {
+    const onExport = async (data) => {
         const body = {}
         if (data.includes('Agentflows')) body.agentflow = true
         if (data.includes('Agentflows V2')) body.agentflowv2 = true
@@ -320,7 +320,26 @@ const ProfileSection = ({ handleLogout }) => {
         if (data.includes('Tools')) body.tool = true
         if (data.includes('Variables')) body.variable = true
 
-        exportAllApi.request(body)
+        try {
+            const response = await exportImportApi.downloadData(body)
+            const dataUri = URL.createObjectURL(response.data)
+            const linkElement = document.createElement('a')
+            linkElement.href = dataUri
+            linkElement.download = 'ExportData.json'
+            document.body.appendChild(linkElement)
+            try {
+                linkElement.click()
+            } finally {
+                linkElement.remove()
+                setTimeout(() => URL.revokeObjectURL(dataUri), 60000)
+            }
+        } catch (error) {
+            if ([401, 403, 429].includes(error.response?.status)) handleError(error)
+            const message = error.response?.data?.message || getErrorMessage(error)
+            errorFailed(`Failed to export: ${message}`)
+        } finally {
+            setExportDialogOpen(false)
+        }
     }
 
     useEffect(() => {
@@ -343,39 +362,6 @@ const ProfileSection = ({ handleLogout }) => {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [importAllApi.error])
-
-    useEffect(() => {
-        if (exportAllApi.data) {
-            setExportDialogOpen(false)
-            try {
-                const dataStr = stringify(exportData(exportAllApi.data))
-                //const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr)
-                const blob = new Blob([dataStr], { type: 'application/json' })
-                const dataUri = URL.createObjectURL(blob)
-
-                const linkElement = document.createElement('a')
-                linkElement.setAttribute('href', dataUri)
-                linkElement.setAttribute('download', exportAllApi.data.FileDefaultName)
-                linkElement.click()
-            } catch (error) {
-                errorFailed(`Failed to export all: ${getErrorMessage(error)}`)
-            }
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [exportAllApi.data])
-
-    useEffect(() => {
-        if (exportAllApi.error) {
-            setExportDialogOpen(false)
-            let errMsg = 'Internal Server Error'
-            let error = exportAllApi.error
-            if (error?.response?.data) {
-                errMsg = typeof error.response.data === 'object' ? error.response.data.message : error.response.data
-            }
-            errorFailed(`Failed to export: ${errMsg}`)
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [exportAllApi.error])
 
     useEffect(() => {
         if (prevOpen.current === true && open === false) {

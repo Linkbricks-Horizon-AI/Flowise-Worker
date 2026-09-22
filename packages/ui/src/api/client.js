@@ -16,7 +16,15 @@ apiClient.interceptors.response.use(
         return response
     },
     async (error) => {
-        if (error.response.status === 401) {
+        // Download failures still carry JSON errors, including token-refresh instructions.
+        if (error.response?.data instanceof Blob) {
+            try {
+                error.response.data = JSON.parse(await error.response.data.text())
+            } catch {
+                // Keep non-JSON errors intact (e.g. a proxy error page).
+            }
+        }
+        if (error.response?.status === 401) {
             // check if refresh is needed
             if (error.response.data.message === ErrorMessage.TOKEN_EXPIRED && error.response.data.retry === true) {
                 const originalRequest = error.config
