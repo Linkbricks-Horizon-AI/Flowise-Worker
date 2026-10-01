@@ -140,6 +140,9 @@ export class RedisEventSubscriber {
 
         try {
             switch (eventType) {
+                case 'progress':
+                    this.sseStreamer.streamCustomEvent(chatId, 'progress', data)
+                    break
                 case 'start':
                     this.sseStreamer.streamStartEvent(chatId, data)
                     break

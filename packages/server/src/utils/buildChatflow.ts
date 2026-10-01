@@ -778,6 +778,7 @@ export const executeFlow = async ({
             uploads,
             prependMessages,
             ...(isStreamValid && { sseStreamer, shouldStreamResponse: isStreamValid }),
+            streamProgress: incomingInput.streamProgress === true,
             evaluationRunId,
             updateStorageUsage,
             checkStorage

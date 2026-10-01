@@ -5,15 +5,17 @@ import { SSEStreamer } from '../utils/SSEStreamer'
 // is side-effect free for testing the private routing decision in handleEvent.
 
 function makeSubscriberWithSpy() {
+    const progressCalls: Array<{ slotKey: string; event: string; data: any }> = []
     const tokenCalls: Array<{ slotKey: string; data: any }> = []
     const errorCalls: Array<{ slotKey: string; msg: string }> = []
     const fakeStreamer = {
+        streamCustomEvent: (slotKey: string, event: string, data: any) => progressCalls.push({ slotKey, event, data }),
         streamTokenEvent: (slotKey: string, data: any) => tokenCalls.push({ slotKey, data }),
         streamErrorEvent: (slotKey: string, msg: string) => errorCalls.push({ slotKey, msg })
     } as unknown as SSEStreamer
     const subscriber = new RedisEventSubscriber(fakeStreamer)
     const handle = (msg: string) => (subscriber as any).handleEvent(msg)
-    return { handle, tokenCalls, errorCalls }
+    return { handle, tokenCalls, errorCalls, progressCalls }
 }
 
 describe('RedisEventSubscriber.handleEvent — transport routing key', () => {
@@ -49,5 +51,19 @@ describe('RedisEventSubscriber.handleEvent — transport routing key', () => {
         // No cross-contamination: each token went to its own execution's slot.
         expect(tokenCalls.find((c) => c.data === 'from A')?.slotKey).toBe('relay-A')
         expect(tokenCalls.find((c) => c.data === 'from B')?.slotKey).toBe('relay-B')
+    })
+})
+
+describe('progress relay', () => {
+    it('preserves per-execution isolation, legacy fallback and token order', () => {
+        const { handle, progressCalls, tokenCalls } = makeSubscriberWithSpy()
+        const data = { version: 1, runId: 'run', sequence: 1, startedAt: 1, at: 1, phase: 'collecting' }
+        for (const relayExecutionId of ['A', 'B', undefined]) {
+            handle(JSON.stringify({ eventType: 'progress', chatId: 'same-chat', relayExecutionId, data }))
+            handle(JSON.stringify({ eventType: 'token', chatId: 'same-chat', relayExecutionId, data: 'first' }))
+        }
+        expect(progressCalls.map((c) => c.slotKey)).toEqual(['A', 'B', 'same-chat'])
+        expect(progressCalls.every((c) => c.event === 'progress' && c.data.phase === 'collecting')).toBe(true)
+        expect(tokenCalls.map((c) => c.data)).toEqual(['first', 'first', 'first'])
     })
 })
