@@ -27,6 +27,7 @@ import { LunaryHandler } from '@langchain/community/callbacks/handlers/lunary'
 import { getCredentialData, getCredentialParam, getEnvironmentVariable } from './utils'
 import { applyEnvTracingProviders, tracingEnvEnabled } from './tracingEnv'
 import { streamDirectToolReturn } from './directToolReturn'
+import { StreamProgressHandler } from './streamProgress'
 import { EvaluationRunTracer } from '../evaluation/EvaluationRunTracer'
 import { EvaluationRunTracerLlama } from '../evaluation/EvaluationRunTracerLlama'
 import { ICommonObject, IDatabaseEntity, INodeData, IServerSideEventStreamer } from './Interface'
@@ -518,11 +519,15 @@ class ExtendedLunaryHandler extends LunaryHandler {
 
 export const additionalCallbacks = async (nodeData: INodeData, options: ICommonObject) => {
     try {
-        if (!options.analytic && !tracingEnvEnabled()) return []
+        const progressCallbacks =
+            options.streamProgress === true && options.shouldStreamResponse && options.sseStreamer
+                ? [new StreamProgressHandler(options.sseStreamer, options.chatId)]
+                : []
+        if (!options.analytic && !tracingEnvEnabled()) return progressCallbacks
 
         const initial = options.analytic ? JSON.parse(options.analytic) : {}
         const { analytic, envCredentials } = applyEnvTracingProviders(initial)
-        const callbacks: any = []
+        const callbacks: any = [...progressCallbacks]
 
         for (const provider in analytic) {
             const providerStatus = analytic[provider].status as boolean

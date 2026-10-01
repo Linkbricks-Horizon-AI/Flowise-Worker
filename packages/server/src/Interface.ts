@@ -370,6 +370,8 @@ export interface IncomingInput {
     history?: IMessage[]
     action?: IAction
     streaming?: boolean
+    /** Opt-in sanitized execution progress; does not change answer streaming. */
+    streamProgress?: boolean
 }
 
 export interface IncomingAgentflowInput extends Omit<IncomingInput, 'question'> {

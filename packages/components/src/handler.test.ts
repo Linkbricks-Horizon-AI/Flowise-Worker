@@ -1,5 +1,5 @@
 import { OTLPTraceExporter as ProtoOTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto'
-import { getPhoenixTracer, AnalyticHandler } from './handler'
+import { getPhoenixTracer, AnalyticHandler, additionalCallbacks } from './handler'
 import { resetTracingEnvCache } from './tracingEnv'
 
 jest.mock('@opentelemetry/exporter-trace-otlp-proto', () => {
@@ -432,5 +432,21 @@ describe('AnalyticHandler chainRun map on recursive onChainStart', () => {
         expect(innerRun.patchRun).toHaveBeenCalledTimes(1)
         expect(outerRun.end).toHaveBeenCalledWith({ outputs: { output: 'outer output' } })
         expect(innerRun.end).toHaveBeenCalledWith({ outputs: { output: 'inner output' } })
+    })
+})
+
+describe('opt-in answer progress callbacks', () => {
+    it.each([undefined, false, true])('only enables progress on explicitly opted-in streaming requests (%s)', async (enabled) => {
+        const options = {
+            streamProgress: enabled,
+            shouldStreamResponse: true,
+            sseStreamer: { streamCustomEvent: jest.fn() },
+            chatId: 'test'
+        }
+        const callbacks = await additionalCallbacks({} as any, options)
+        expect(callbacks.filter((c: any) => c.name === 'stream_progress_handler')).toHaveLength(enabled === true ? 1 : 0)
+        expect(options.sseStreamer.streamCustomEvent).not.toHaveBeenCalled()
+        const nonStreaming = await additionalCallbacks({} as any, { ...options, shouldStreamResponse: false })
+        expect(nonStreaming.filter((c: any) => c.name === 'stream_progress_handler')).toHaveLength(0)
     })
 })
