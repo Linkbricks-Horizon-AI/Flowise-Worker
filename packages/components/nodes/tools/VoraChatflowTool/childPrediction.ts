@@ -9,9 +9,20 @@ function isObject(value: unknown): value is ICommonObject {
     return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-export function childOverrideConfig(explicit: unknown, parent: ParentToolVariables, sessionId?: string): ICommonObject {
-    if (typeof parent.user_id !== 'string' || !parent.user_id.trim()) {
-        throw new Error('Vora Chatflow Tool requires the parent request user_id. Enable API Override and allow user_id in Variables.')
+export function childOverrideConfig(
+    explicit: unknown,
+    parent: ParentToolVariables,
+    sessionId?: string,
+    requireUserId = true
+): ICommonObject {
+    const hasUserId = typeof parent.user_id === 'string' && Boolean(parent.user_id.trim())
+    if (requireUserId && !hasUserId) {
+        throw new Error(
+            'Vora Chatflow Tool requires the parent request user_id. Enable API Override and allow user_id in Variables, or turn off Require User ID for canvas tests.'
+        )
+    }
+    if (parent.user_id != null && typeof parent.user_id !== 'string') {
+        throw new Error('Vora Chatflow Tool requires user_id to be a string when provided.')
     }
     if (parent.tool_usage !== undefined && typeof parent.tool_usage !== 'string') {
         throw new Error('Vora Chatflow Tool requires tool_usage to be a JSON string when provided.')
@@ -34,7 +45,8 @@ export function childOverrideConfig(explicit: unknown, parent: ParentToolVariabl
     return {
         sessionId,
         ...override,
-        vars: { ...override.vars, user_id: parent.user_id, tool_usage: parent.tool_usage ?? '' }
+        // An anonymous test must not inherit a saved/workspace user's identity.
+        vars: { ...override.vars, user_id: hasUserId ? parent.user_id : '', tool_usage: parent.tool_usage ?? '' }
     }
 }
 

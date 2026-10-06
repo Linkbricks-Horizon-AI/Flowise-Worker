@@ -84,6 +84,34 @@ describe('Vora node calls', () => {
         expect(fetchMock).not.toHaveBeenCalled()
     })
 
+    it.each([false, 'false'])('allows a canvas call without vars when Require User ID is %j', async (requireUserId) => {
+        fetchMock.mockResolvedValue(jsonResponse())
+        const tool = await create({
+            requireUserId,
+            vars: undefined,
+            useQuestionFromChat: true,
+            overrideConfig: { vars: { user_id: 'stale-child-user', tool_usage: 'stale-quota' } }
+        })
+        const context = flow()
+        expect(await tool.call({ input: 'model question' }, undefined, undefined, context)).toBe('answer')
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(bodyAt().question).toBe('parent question')
+        expect(bodyAt().overrideConfig).toEqual({ sessionId: 'parent-session', vars: { user_id: '', tool_usage: '' } })
+        expect(context.usedTools?.[0].tool).toBe('actual_child')
+    })
+
+    it.each([undefined, true, 'true'])('keeps identity required for existing/default/ON nodes: %j', async (requireUserId) => {
+        const tool = await create({ requireUserId, vars: undefined })
+        await expect(tool.call({ input: 'query', requireUserId: false, user_id: 'forged' } as any)).rejects.toThrow('Require User ID')
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('forwards the parent identity and quota even when Require User ID is OFF', async () => {
+        fetchMock.mockResolvedValue(jsonResponse())
+        await (await create({ requireUserId: false })).call({ input: 'query' })
+        expect(bodyAt().overrideConfig.vars).toEqual({ user_id: 'user-A', tool_usage: '{"child_code":0}' })
+    })
+
     it.each([false, 'false'])('excludes a disabled node before credential or selection validation: %j', async (toolEnabled) => {
         expect(await new VoraNode().init({ inputs: { toolEnabled } }, '', {})).toBeNull()
     })

@@ -99,7 +99,7 @@ SHA-256: `0358833987f1d486f9d474d453566927436a1dd0456e69d43f3646dc6a217b48`.
 | ------------------ | ------------------------------------------------- |
 | label              | `Vora Chatflow Tool`                              |
 | name / type        | `VoraChatflowTool`                                |
-| version            | `1.0`                                             |
+| version            | `1.1`                                             |
 | category           | `Tools`                                           |
 | baseClasses        | `['VoraChatflowTool', 'Tool']`                    |
 | tags               | 일반 LangChain 노드 분류를 따름                   |
@@ -114,6 +114,8 @@ Select Chatflow는 현재 Flowise의 실제 선택 목록을 사용한다. 예�
 기존 입력 필드는 유지한다: Select Chatflow, Tool Name, Tool Description, Return Direct, Override Config, Base URL, Start new session per message, Use Question from Chat, Custom Input.
 
 신규 `Tool Enabled`는 기본 true로 둔다. 무료 검색 허브에서는 그대로 사용한다. 부모에서 허브 전체를 제어해야 할 경우에만 이 입력의 API override를 허용한다. false 또는 문자열 'false'이면 null을 반환하여 메인 모델의 도구 목록에서 제외한다. 기존 generic override가 관계없는 노드의 입력에 맵 객체를 남기는 경우를 오류로 처리하지 않는다.
+
+v1.1의 Additional Parameters에는 `Require User ID`를 추가한다. 기본 ON이며 값이 없는 기존 v1.0 노드도 ON으로 처리한다. OFF이면 부모 사용자 ID가 없는 캔버스 테스트를 허용하고 자식에 빈 `user_id`를 명시해 저장된 다른 사용자의 값을 상속하지 않는다. OFF라도 부모 ID가 있으면 그대로 전달한다. 이 토글은 ID의 필수 여부만 제어하며 상속을 끄거나 `tool_usage` 검사를 해제하지 않는다. 사용자 ID가 필요한 실제 도구 API는 별도로 ID를 요구할 수 있다.
 
 `user_id`·`tool_usage`를 직접 적는 입력란이나 전체 부모 override 상속 토글은 만들지 않는다. 노드 설명에는 “부모 요청에 적용된 사용자와 도구 잔여량 정보를 자동 전달하며 부모·자식의 변수 override 허용이 필요함”을 명시한다.
 
@@ -148,8 +150,8 @@ VORA 인증 세션
 2. `getVars`로 워크스페이스 기본값을 찾아 부모 사용자 대신 쓰지 않는다. `{{$vars.user_id}}` 문자열 치환에도 의존하지 않는다. 현재 서버의 일반 템플릿 해석과 요청 override 변수 적용 경로는 동일하지 않다.
 3. LLM 입력 스키마에 user_id, vars, overrideConfig를 추가하지 않는다. 사용자가 질문에 적은 ID나 모델이 만든 ID를 전달 값으로 사용하지 않는다.
 4. 부모 user_id는 자식 Override Config의 수동 `vars.user_id`보다 우선한다. 다른 ID가 적혀 있어도 부모의 현재 값이 최종값이다.
-5. 값이 없거나 빈 문자열·문자열이 아닌 경우 **실제 도구 호출 시점에**, 자식 HTTP 요청 전에 명확한 설정 오류를 반환한다. 무료 허브를 호출하지 않은 일반 대화까지 init 단계에서 실패시키지 않는다.
-6. 오류 메시지는 부모의 API Override와 user_id 허용 설정을 확인하도록 안내한다. 실제 사용자 ID나 credential을 오류에 넣지 않는다.
+5. `Require User ID` ON에서는 값이 없거나 빈 문자열·문자열이 아닌 경우 **실제 도구 호출 시점에**, 자식 HTTP 요청 전에 명확한 설정 오류를 반환한다. OFF에서는 누락·null·빈값을 빈 문자열로 전달해 캔버스 테스트를 허용한다. 제공된 값의 잘못된 타입은 OFF에서도 오류다. 무료 허브를 호출하지 않은 일반 대화까지 init 단계에서 실패시키지 않는다.
+6. 오류 메시지는 부모의 API Override와 user_id 허용 설정 또는 캔버스 테스트용 `Require User ID` OFF를 안내한다. 실제 사용자 ID나 credential을 오류에 넣지 않는다.
 
 허용 상태가 꺼져 있으면 자동으로 설정을 켜지 않는다. 특히 자식 허용 설정이 꺼지면 Flowise가 전달 값을 무시할 수 있으므로, 자식의 실제 수신값 검증은 워크플로우 전환의 필수 조건이다.
 
@@ -425,7 +427,7 @@ VORA 서비스의 user_id 생성·toolEnabled 전송·기존 과금 코드 변�
 | 사용자 상속         | 요청 user_id가 워크스페이스 기본값보다 우선하고 자식 도구가 그 값을 실제 수신                               |
 | 병합 우선순위       | 로컬 Override Config의 다른 user_id, LLM 인자, 질문 속 ID로 부모 값을 바꿀 수 없음                          |
 | 허용 설정           | 부모 override OFF / user_id 미허용이면 호출 전 설정 오류; 자식 OFF / 미허용은 수신 검증 실패로 전환 불가    |
-| 누락 처리           | user_id 누락·빈값·잘못된 타입에서 자식 HTTP 호출 0회; 허브를 쓰지 않은 일반 질의는 계속 가능                |
+| 누락 처리           | Require User ID ON이면 누락 시 HTTP 0회; OFF이면 빈 사용자로 1회 호출; 잘못된 타입은 계속 차단              |
 | 사용자 격리         | 사용자 A/B 동시 호출에서 상대 user_id·sessionId·결과가 섞이지 않음                                          |
 | 무료 도구 한도      | tool_usage의 해당 코드가 0이면 실제 외부 API 호출 없이 QUOTA_EXHAUSTED 반환; 양수/-1 통과                   |
 | 잔여량 상속         | 현재 부모 JSON 값 우선, 다른 사용자·고정값과 혼합 없음, 자식 허용 OFF로 검사가 생략되지 않는지 확인         |

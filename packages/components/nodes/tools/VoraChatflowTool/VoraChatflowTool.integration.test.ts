@@ -163,7 +163,14 @@ describe('parent ToolAgent → real prediction HTTP → child ToolAgent', () => 
         requests = []
     })
 
-    async function run(parentDirect: boolean, streaming: boolean, remaining = 1, user = 'user-A', selectedChatflow = CHILD) {
+    async function run(
+        parentDirect: boolean,
+        streaming: boolean,
+        remaining = 1,
+        user = 'user-A',
+        selectedChatflow = CHILD,
+        nodeOverrides: Record<string, unknown> = {}
+    ) {
         const hub = await new VoraNode().init(
             {
                 id: 'VoraChatflowTool_7',
@@ -174,7 +181,8 @@ describe('parent ToolAgent → real prediction HTTP → child ToolAgent', () => 
                     returnDirect: parentDirect,
                     useQuestionFromChat: true,
                     vars: { user_id: user, tool_usage: JSON.stringify({ [CODE]: remaining, future_tool: 9 }) },
-                    toolEnabled: { customTool_11: false } // Unrelated parent ID left by generic overrides.
+                    toolEnabled: { customTool_11: false }, // Unrelated parent ID left by generic overrides.
+                    ...nodeOverrides
                 }
             },
             '사용자 질문',
@@ -274,6 +282,25 @@ describe('parent ToolAgent → real prediction HTTP → child ToolAgent', () => 
         expect(f.text).toBe('QUOTA_EXHAUSTED:' + CODE)
         expect(f.result.usedTools[0].toolOutput).toBe(f.text)
         expect(f.result.usedTools).toHaveLength(1)
+    })
+
+    it.each([
+        [false, false],
+        [false, true],
+        [true, false],
+        [true, true]
+    ])('supports a canvas request without vars: parent direct=%s, streaming=%s', async (direct, streaming) => {
+        childDirect = true
+        const f = await run(direct, streaming, 1, 'canvas', CHILD, { vars: undefined, requireUserId: false })
+        const expected = direct ? RAW : PARENT_ANSWER
+        expect(f.result.text).toBe(expected)
+        expect(f.text).toBe(streaming ? expected : '')
+        expect(requests).toHaveLength(1)
+        expect(requests[0].body.question).toBe('사용자 질문')
+        expect(requests[0].body.overrideConfig.vars).toEqual({ user_id: '', tool_usage: '' })
+        expect(toolExecutions).toBe(1)
+        expect(f.result.usedTools.map((tool: any) => tool.tool)).toEqual([CODE])
+        if (streaming) expect(f.events.filter((event) => event.event === 'usedTools').at(-1).data).toEqual(f.result.usedTools)
     })
 
     it('supports distinct child selections and concurrent users without ID mapping', async () => {

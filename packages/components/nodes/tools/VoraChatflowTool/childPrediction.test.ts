@@ -32,6 +32,24 @@ describe('permission-filtered parent variables and explicit child settings', () 
         expect(() => childOverrideConfig({ vars: { user_id: 'fallback' } }, { user_id })).toThrow('parent request user_id')
     })
 
+    it.each([undefined, null, '', '   '])('allows missing identity %j only when optional, clearing stale child values', (user_id) => {
+        expect(
+            childOverrideConfig({ vars: { user_id: 'other-user', tool_usage: 'stale', locale: 'ko' } }, { user_id }, 'canvas', false)
+        ).toEqual({
+            sessionId: 'canvas',
+            vars: { user_id: '', tool_usage: '', locale: 'ko' }
+        })
+    })
+
+    it('still forwards the supplied identity and quota when identity is optional', () => {
+        const vars = { user_id: 'current-user', tool_usage: '{"search":0}' }
+        expect(childOverrideConfig({ vars: { user_id: 'other-user' } }, vars, 'canvas', false).vars).toEqual(vars)
+    })
+
+    it.each([123, false, {}, []])('does not accept malformed identity %j in optional mode', (user_id) => {
+        expect(() => childOverrideConfig({}, { user_id }, 'canvas', false)).toThrow('user_id to be a string')
+    })
+
     it.each([null, {}, 0, false])('rejects a non-string quota map %j', (tool_usage) => {
         expect(() => childOverrideConfig({}, { user_id: 'user', tool_usage })).toThrow('tool_usage')
     })
