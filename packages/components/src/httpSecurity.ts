@@ -336,8 +336,11 @@ function createPinnedAgent(target: ResolvedTarget, options?: { ca?: string | str
     const Agent = target.protocol === 'https' ? https.Agent : http.Agent
 
     return new Agent({
-        lookup: (_host, _opts, cb) => {
-            cb(null, target.ip, target.family)
+        lookup: (_host, lookupOptions, cb) => {
+            // Node's family auto-selection requests all addresses. Return the same
+            // validated, pinned IP in that callback shape; never resolve DNS again.
+            if (lookupOptions.all) cb(null, [{ address: target.ip, family: target.family }])
+            else cb(null, target.ip, target.family)
         },
         ...options
     })

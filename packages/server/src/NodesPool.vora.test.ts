@@ -30,7 +30,7 @@ describe('Vora node registration alongside the original Chatflow Tool', () => {
             label: 'Vora Chatflow Tool',
             name: 'VoraChatflowTool',
             type: 'VoraChatflowTool',
-            version: 1,
+            version: 1.1,
             category: 'Tools',
             baseClasses: ['VoraChatflowTool', 'Tool'],
             icon: '/virtual/VoraChatflowTool/voraRouter.png'
@@ -43,6 +43,11 @@ describe('Vora node registration alongside the original Chatflow Tool', () => {
         expect(pool.componentCredentials.chatflowApi.icon).toBe('/virtual/ChatflowTool/chatflowTool.svg')
         const fields = pool.componentNodes.VoraChatflowTool.inputs!
         expect(fields.find((field) => field.name === 'toolEnabled')).toMatchObject({ default: true, type: 'boolean' })
+        expect(fields.find((field) => field.name === 'requireUserId')).toMatchObject({
+            default: true,
+            type: 'boolean',
+            additionalParams: true
+        })
         expect(fields.some((field) => field.name === 'user_id' || field.name === 'tool_usage')).toBe(false)
     })
 })

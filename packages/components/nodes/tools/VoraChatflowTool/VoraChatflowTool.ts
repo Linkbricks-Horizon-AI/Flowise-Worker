@@ -29,7 +29,7 @@ class VoraChatflowTool_Tools implements INode {
     constructor() {
         this.label = 'Vora Chatflow Tool'
         this.name = 'VoraChatflowTool'
-        this.version = 1.0
+        this.version = 1.1
         this.type = 'VoraChatflowTool'
         this.icon = 'voraRouter.png'
         this.category = 'Tools'
@@ -74,6 +74,16 @@ class VoraChatflowTool_Tools implements INode {
                 label: 'Tool Enabled',
                 name: 'toolEnabled',
                 type: 'boolean',
+                default: true,
+                optional: true,
+                additionalParams: true
+            },
+            {
+                label: 'Require User ID',
+                name: 'requireUserId',
+                type: 'boolean',
+                description:
+                    'Require vars.user_id from the parent request. Turn off for canvas tests without a user ID. A provided parent user_id is always forwarded.',
                 default: true,
                 optional: true,
                 additionalParams: true
@@ -176,6 +186,8 @@ class VoraChatflowTool_Tools implements INode {
         const description = nodeData.inputs?.description as string
         const useQuestionFromChat = nodeData.inputs?.useQuestionFromChat === true || nodeData.inputs?.useQuestionFromChat === 'true'
         const returnDirect = nodeData.inputs?.returnDirect === true || nodeData.inputs?.returnDirect === 'true'
+        // Saved v1.0 nodes have no value: preserve their required-identity behavior.
+        const requireUserId = nodeData.inputs?.requireUserId !== false && nodeData.inputs?.requireUserId !== 'false'
         const customInput = nodeData.inputs?.customInput as string
         // Capture request-applied values, never workspace defaults or LLM arguments.
         const appliedParentVariables = Object.freeze({
@@ -225,7 +237,8 @@ class VoraChatflowTool_Tools implements INode {
             headers,
             input: toolInput,
             overrideConfig,
-            appliedParentVariables
+            appliedParentVariables,
+            requireUserId
         })
     }
 }
@@ -245,6 +258,7 @@ class VoraChatflowTool extends StructuredTool {
         headers: ICommonObject
         overrideConfig?: unknown
         appliedParentVariables: ParentToolVariables
+        requireUserId: boolean
     }
 
     schema = z.object({ input: z.string().describe('input question') }) as any
@@ -260,6 +274,7 @@ class VoraChatflowTool extends StructuredTool {
         headers: ICommonObject
         overrideConfig?: unknown
         appliedParentVariables: ParentToolVariables
+        requireUserId: boolean
     }) {
         super()
         this.name = fields.name
@@ -321,7 +336,8 @@ class VoraChatflowTool extends StructuredTool {
         const overrideConfig = childOverrideConfig(
             settings.overrideConfig,
             settings.appliedParentVariables,
-            settings.startNewSession ? uuidv4() : flowConfig.sessionId
+            settings.startNewSession ? uuidv4() : flowConfig.sessionId,
+            settings.requireUserId
         )
         const streaming = Boolean(this.returnDirect && flowConfig.sseStreamer && flowConfig.chatId)
         const requestSignal = signal ?? flowConfig.signal

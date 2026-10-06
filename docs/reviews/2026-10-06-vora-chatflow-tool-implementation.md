@@ -34,13 +34,13 @@
 
 ## 2. 구현된 계약
 
--   신규 타입/이름 `VoraChatflowTool`, 표시 이름 `Vora Chatflow Tool`, 버전 1.0, Tools 분류. 기존 노드와 함께 검색·배치 가능하다.
+-   신규 타입/이름 `VoraChatflowTool`, 표시 이름 `Vora Chatflow Tool`, 현재 버전 1.1, Tools 분류. 기존 노드와 함께 검색·배치 가능하다.
 -   VoraRouter2의 `voraRouter.png`와 바이트 단위로 같은 아이콘을 사용한다. 공용 `chatflowApi` credential 아이콘을 덮어쓰지 않는다.
 -   기존 `ChatflowTool.ts`는 공식 원본 blob `a2ae7cc8172e70c6edf644be749ee9d2d1c3ffa4`와 정확히 일치한다. 원본 변경 커밋은 `3f257bdc8196082a178da7134a075824401b13b9`이다.
 -   저장된 `ChatflowTool`을 신규 타입으로 자동 전환하지 않는다. 기존 타입은 복구한 원본 동작으로 실행된다.
 -   부모에 실제 적용된 `vars.user_id`, `vars.tool_usage`만 자동 전달한다. 부모와 자식 모두 API Override 및 해당 Variables 허용이 필요하다.
 -   `tool_usage`는 TOOL_CODE를 키로 하는 전체 JSON 문자열이다. 워크플로우마다 다른 node ID를 복사하거나 대응시키지 않는다.
--   부모 user_id가 없거나 올바른 문자열이 아니면 실제 자식 호출 시점에 오류로 처리한다. 허브를 호출하지 않은 일반 질의의 노드 초기화는 가능하다.
+-   기본 `Require User ID` ON에서는 부모 user_id가 없으면 실제 자식 호출 시점에 오류로 처리한다. v1.1에서는 이 토글을 OFF로 설정해 사용자 ID가 없는 캔버스 테스트를 허용한다. 부모 ID가 있으면 ON/OFF와 관계없이 상속하며 잘못된 타입은 계속 오류로 처리한다. 허브를 호출하지 않은 일반 질의의 노드 초기화는 가능하다.
 -   부모 tool_usage가 없으면 빈 문자열을 전달하여 자식의 고정 quota 값을 남기지 않는다. 무료 도구의 기존 값 없음 정책은 유지한다.
 -   Override Config 기본값은 빈 객체이며 다른 명시적 자식 설정은 유지한다. 예약된 user_id/tool_usage는 현재 부모 값이 우선한다.
 -   부모의 toolEnabled map, 시스템 프롬프트, 모델 설정과 나머지 vars는 자동 복사하지 않는다. 메인 도구의 추가·삭제에 종속된 고정 목록이 없다.
@@ -105,3 +105,31 @@ UI 이미지와 기존/신규 HTTP 비교 결과는 Web 저장소 `output/playwr
 -   최종 무료 도구 분리 후 provider tools/usage를 비교하여 실제 토큰 절감 측정.
 
 세부 설계는 `2026-10-06-vora-chatflow-tool-design.md`를 참조한다.
+
+## 6. v1.1: 캔버스 테스트용 사용자 ID 필수 여부
+
+v1.0 배포용 커밋은 Web `7c943690c6f405fb31c9f7e2f5fa3dfcd6ce534c`, Worker `6b2458c79e4b089f80ceaeceed132b85dc476f71`이다. 후속 작업 브랜치는 양쪽 모두 `bugfix/vora-optional-user-id`이다.
+
+Flowise 캔버스 테스트 요청은 기본적으로 `question`과 `chatId`를 보내며 VORA 서비스의 `overrideConfig.vars.user_id`를 포함하지 않는다. v1.0의 사용자 ID 검사는 자식 HTTP 요청 전에 이를 중단했다. 사용자의 요청에 따라 Vora 노드의 Additional Parameters에 `Require User ID`를 추가했다.
+
+-   기본값 ON. 필드가 없는 저장된 v1.0 노드도 기존 필수 동작을 유지한다.
+-   OFF이면 ID 없는 캔버스 테스트를 허용한다. ID가 있으면 ON/OFF와 관계없이 그대로 전달한다.
+-   익명 테스트에서는 예약된 user_id를 빈 문자열로 전달하여 수동 Override Config의 다른 사용자 ID를 물려받지 않는다.
+-   tool_usage 검증·전달과 기존 Return Direct/usedTools 동작은 유지한다. LLM 인수로 필수 여부를 변경할 수 없다.
+
+사용 순서는 배포 후 캔버스의 노드 갱신 버튼으로 Vora 노드를 1.1로 갱신하고, Additional Parameters → Require User ID OFF → 저장이다. 격리 UI에서 기존 1.0 노드 갱신 시 ON 기본값을 확인하고, OFF 저장·새로고침 후에도 OFF가 유지됨을 확인했다. 기존 이름, 설명, Return Direct OFF 및 3개 노드·2개 연결도 보존됐다.
+
+실제 도메인으로 호출하면서 별도의 기존 DNS callback 호환성 오류도 확인했다. `httpSecurity.ts`의 DNS pinning 구현은 Node의 `lookupOptions.all=true` 요청에도 단일 주소 인수를 반환하여 `Invalid IP address: undefined`를 발생시켰다. 원래 Flowise 코드에서 이어진 구현이며, 이번에 차단 정책을 추가한 결과가 아니다. 주소 배열을 요구할 때 이미 검증한 동일 IP 하나를 배열로 반환하도록 고쳤다. 기본/사용자 deny list, private IP 차단, redirect 검증과 DNS pinning 정책은 변경하지 않았다. 같은 Flowise의 서로 다른 채팅 흐름도 표시 이름이 아닌 UUID를 사용해 prediction API로 호출한다.
+
+새 실제 소켓 회귀 테스트는 수정 전 fetch/axios의 autoSelectFamily ON 두 경우에 위 오류를 재현했고, 수정 후 ON/OFF 네 경우와 차단 주소가 섞인 DNS 응답 거부 두 경우가 모두 통과했다. DNS 재조회 없이 검증한 IP만 사용함도 확인했다.
+
+| 저장소         |                   components |                       server | 루트 필터 빌드 |
+| -------------- | ---------------------------: | ---------------------------: | -------------- |
+| Flowise        | 35 suites / 1,138 tests 통과 | 54 suites / 1,061 tests 통과 | 3 tasks 성공   |
+| Flowise-Worker | 35 suites / 1,138 tests 통과 | 51 suites / 1,053 tests 통과 | 3 tasks 성공   |
+
+기존 루트 필터 테스트·빌드 명령을 양쪽에서 재실행했다. 토글 OFF + 사용자 ID 없음에 대해 부모 Return Direct ON/OFF × 부모 SSE/JSON의 실제 HTTP 통합 테스트 4개를 추가했다. 변경 TypeScript ESLint와 diff check도 통과했다.
+
+로컬에서 빌드한 v1.1 노드로 `https://hub.horizonai.ai`의 실제 `test sub`를 호출했다. ON은 ID 누락 시 HTTP 전에 중단했고, OFF는 새 격리 세션에서 부산 날씨 질문을 전달하여 자식의 현재 날짜 도구 결과와 `vora_tool_utility_current_date_time` 사용 내역을 받았다. 이는 질문 전달 및 도구 내역 수신 확인이며, 자식의 날씨 검색 완성도나 운영 Web/Worker의 v1.1 배포 완료를 뜻하지 않는다. 운영 그래프, 시스템 프롬프트, VORA 서비스 코드 및 환경 설정은 변경하지 않았다.
+
+후속 검증 로그는 `/tmp/vora-optional-{web,worker}-final-{tests,build}.log`, `/tmp/vora-dns-{before,after}.log`, `/tmp/vora-optional-id-live.log`에 있다. 토글 UI 이미지는 Web의 `output/playwright/vora-chatflow-tool/require-user-id-off.png`에 보관한다.
