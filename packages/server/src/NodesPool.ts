@@ -60,7 +60,7 @@ export class NodesPool {
                                 newNodeInstance.icon = nodeIconAbsolutePath
 
                                 // Store icon path for componentCredentials
-                                if (newNodeInstance.credential) {
+                                if (newNodeInstance.credential && !newNodeInstance.skipCredentialIconRegistration) {
                                     for (const credName of newNodeInstance.credential.credentialNames) {
                                         this.credentialIconPath[credName] = nodeIconAbsolutePath
                                     }

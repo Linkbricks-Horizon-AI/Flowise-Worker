@@ -1,20 +1,19 @@
+import { cloneDeep } from 'lodash'
+import type { RequestInit } from 'node-fetch'
 import { DataSource } from 'typeorm'
 import { z } from 'zod/v3'
 import { RunnableConfig } from '@langchain/core/runnables'
 import { CallbackManagerForToolRun, Callbacks, CallbackManager, parseCallbackConfigArg } from '@langchain/core/callbacks/manager'
 import { StructuredTool } from '@langchain/core/tools'
-import { ICommonObject, IDatabaseEntity, INode, INodeData, INodeOptionsValue, INodeParams } from '../../../src/Interface'
-import {
-    getCredentialData,
-    getCredentialParam,
-    executeJavaScriptCode,
-    createCodeExecutionSandbox,
-    parseWithTypeConversion
-} from '../../../src/utils'
+import { ICommonObject, IDatabaseEntity, INode, INodeData, INodeOptionsValue, INodeParams, IToolFlowConfig } from '../../../src/Interface'
+import { getCredentialData, getCredentialParam, parseWithTypeConversion } from '../../../src/utils'
+import { secureFetch } from '../../../src/httpSecurity'
+import { markTransparentTool } from '../../../src/transparentTool'
+import { childOverrideConfig, ParentToolVariables, readChildPrediction } from './childPrediction'
 import { isValidUUID, isValidURL } from '../../../src/validator'
 import { v4 as uuidv4 } from 'uuid'
 
-class ChatflowTool_Tools implements INode {
+class VoraChatflowTool_Tools implements INode {
     label: string
     name: string
     version: number
@@ -25,15 +24,17 @@ class ChatflowTool_Tools implements INode {
     baseClasses: string[]
     credential: INodeParams
     inputs: INodeParams[]
+    skipCredentialIconRegistration = true
 
     constructor() {
-        this.label = 'Chatflow Tool'
-        this.name = 'ChatflowTool'
-        this.version = 5.1
-        this.type = 'ChatflowTool'
-        this.icon = 'chatflowTool.svg'
+        this.label = 'Vora Chatflow Tool'
+        this.name = 'VoraChatflowTool'
+        this.version = 1.0
+        this.type = 'VoraChatflowTool'
+        this.icon = 'voraRouter.png'
         this.category = 'Tools'
-        this.description = 'Use as a tool to execute another chatflow'
+        this.description =
+            'Execute a child chatflow with the parent user and tool quota. Allow user_id and tool_usage overrides in both chatflows.'
         this.baseClasses = [this.type, 'Tool']
         this.credential = {
             label: 'Connect Credential',
@@ -70,9 +71,18 @@ class ChatflowTool_Tools implements INode {
                 optional: true
             },
             {
+                label: 'Tool Enabled',
+                name: 'toolEnabled',
+                type: 'boolean',
+                default: true,
+                optional: true,
+                additionalParams: true
+            },
+            {
                 label: 'Override Config',
                 name: 'overrideConfig',
-                description: 'Override the config passed to the Chatflow.',
+                description:
+                    'Child-specific overrides. Leave empty to inherit the current parent user_id, tool_usage and session. Parent user_id and tool_usage take precedence.',
                 type: 'json',
                 optional: true,
                 additionalParams: true,
@@ -158,20 +168,23 @@ class ChatflowTool_Tools implements INode {
     }
 
     async init(nodeData: INodeData, input: string, options: ICommonObject): Promise<any> {
+        const toolEnabled = nodeData.inputs?.toolEnabled
+        if (toolEnabled === false || toolEnabled === 'false') return null
+
         const selectedChatflowId = nodeData.inputs?.selectedChatflow as string
         const _name = nodeData.inputs?.name as string
         const description = nodeData.inputs?.description as string
-        const useQuestionFromChat = nodeData.inputs?.useQuestionFromChat as boolean
-        const returnDirect = nodeData.inputs?.returnDirect as boolean
+        const useQuestionFromChat = nodeData.inputs?.useQuestionFromChat === true || nodeData.inputs?.useQuestionFromChat === 'true'
+        const returnDirect = nodeData.inputs?.returnDirect === true || nodeData.inputs?.returnDirect === 'true'
         const customInput = nodeData.inputs?.customInput as string
-        const overrideConfig =
-            typeof nodeData.inputs?.overrideConfig === 'string' &&
-            nodeData.inputs.overrideConfig.startsWith('{') &&
-            nodeData.inputs.overrideConfig.endsWith('}')
-                ? JSON.parse(nodeData.inputs.overrideConfig)
-                : nodeData.inputs?.overrideConfig
+        // Capture request-applied values, never workspace defaults or LLM arguments.
+        const appliedParentVariables = Object.freeze({
+            user_id: nodeData.inputs?.vars?.user_id,
+            tool_usage: nodeData.inputs?.vars?.tool_usage
+        })
+        const overrideConfig = cloneDeep(nodeData.inputs?.overrideConfig)
 
-        const startNewSession = nodeData.inputs?.startNewSession as boolean
+        const startNewSession = nodeData.inputs?.startNewSession === true || nodeData.inputs?.startNewSession === 'true'
 
         const baseURL = (nodeData.inputs?.baseURL as string) || (options.baseURL as string)
 
@@ -200,9 +213,9 @@ class ChatflowTool_Tools implements INode {
             toolInput = customInput
         }
 
-        let name = _name || 'chatflow_tool'
+        const name = _name || 'vora_chatflow_tool'
 
-        return new ChatflowTool({
+        return new VoraChatflowTool({
             name,
             baseURL,
             description,
@@ -211,48 +224,32 @@ class ChatflowTool_Tools implements INode {
             startNewSession,
             headers,
             input: toolInput,
-            overrideConfig
+            overrideConfig,
+            appliedParentVariables
         })
     }
 }
 
-class ChatflowTool extends StructuredTool {
+class VoraChatflowTool extends StructuredTool {
     static lc_name() {
-        return 'ChatflowTool'
+        return 'VoraChatflowTool'
     }
 
-    name = 'chatflow_tool'
+    name: string
+    description: string
+    private readonly settings: {
+        input: string
+        chatflowid: string
+        startNewSession: boolean
+        baseURL: string
+        headers: ICommonObject
+        overrideConfig?: unknown
+        appliedParentVariables: ParentToolVariables
+    }
 
-    description = 'Execute another chatflow'
+    schema = z.object({ input: z.string().describe('input question') }) as any
 
-    input = ''
-
-    chatflowid = ''
-
-    startNewSession = false
-
-    baseURL = 'http://localhost:3000'
-
-    headers = {}
-
-    overrideConfig?: object
-
-    schema = z.object({
-        input: z.string().describe('input question')
-        // overrideConfig: z.record(z.any()).optional().describe('override config'), // This will be passed to the Agent, so comment it for now.
-    }) as any
-
-    constructor({
-        name,
-        description,
-        returnDirect,
-        input,
-        chatflowid,
-        startNewSession,
-        baseURL,
-        headers,
-        overrideConfig
-    }: {
+    constructor(fields: {
         name: string
         description: string
         returnDirect: boolean
@@ -261,37 +258,32 @@ class ChatflowTool extends StructuredTool {
         startNewSession: boolean
         baseURL: string
         headers: ICommonObject
-        overrideConfig?: object
+        overrideConfig?: unknown
+        appliedParentVariables: ParentToolVariables
     }) {
         super()
-        this.name = name
-        this.description = description
-        this.input = input
-        this.baseURL = baseURL
-        this.startNewSession = startNewSession
-        this.headers = headers
-        this.chatflowid = chatflowid
-        this.overrideConfig = overrideConfig
-        this.returnDirect = returnDirect
+        this.name = fields.name
+        this.description = fields.description
+        this.returnDirect = fields.returnDirect
+        this.settings = fields
+        markTransparentTool(this)
     }
 
     async call(
         arg: z.infer<typeof this.schema>,
         configArg?: RunnableConfig | Callbacks,
         tags?: string[],
-        flowConfig?: { sessionId?: string; chatId?: string; input?: string }
+        flowConfig?: IToolFlowConfig
     ): Promise<string> {
-        const config = parseCallbackConfigArg(configArg)
-        if (config.runName === undefined) {
-            config.runName = this.name
-        }
+        const config = parseCallbackConfigArg(configArg) as RunnableConfig
+        if (config.runName === undefined) config.runName = this.name
         let parsed
         try {
             parsed = await parseWithTypeConversion(this.schema, arg)
-        } catch (e) {
-            throw new Error(`Received tool input did not match expected schema: ${JSON.stringify(arg)}`)
+        } catch {
+            throw new Error('Vora Chatflow Tool requires an input question string.')
         }
-        const callbackManager_ = await CallbackManager.configure(
+        const callbackManager = await CallbackManager.configure(
             config.callbacks,
             this.callbacks,
             config.tags || tags,
@@ -300,94 +292,73 @@ class ChatflowTool extends StructuredTool {
             this.metadata,
             { verbose: this.verbose }
         )
-        const runManager = await callbackManager_?.handleToolStart(
+        const runManager = await callbackManager?.handleToolStart(
             this.toJSON(),
-            typeof parsed === 'string' ? parsed : JSON.stringify(parsed),
+            JSON.stringify(parsed),
             undefined,
             undefined,
             undefined,
             undefined,
             config.runName
         )
-        let result
         try {
-            result = await this._call(parsed, runManager, flowConfig)
-        } catch (e) {
-            await runManager?.handleToolError(e)
-            throw e
+            const result = await this._call(parsed, runManager, flowConfig, config.signal)
+            await runManager?.handleToolEnd(result)
+            return result
+        } catch (error) {
+            await runManager?.handleToolError(error)
+            throw error
         }
-        if (result && typeof result !== 'string') {
-            result = JSON.stringify(result)
-        }
-        await runManager?.handleToolEnd(result)
-        return result
     }
 
-    // @ts-ignore
     protected async _call(
-        arg: z.infer<typeof this.schema>,
+        arg: { input: string },
         _?: CallbackManagerForToolRun,
-        flowConfig?: { sessionId?: string; chatId?: string; input?: string }
+        flowConfig: IToolFlowConfig = {},
+        signal?: AbortSignal
     ): Promise<string> {
-        const inputQuestion = this.input || arg.input
-
-        const body = {
-            question: inputQuestion,
-            chatId: this.startNewSession ? uuidv4() : flowConfig?.chatId,
-            overrideConfig: {
-                sessionId: this.startNewSession ? uuidv4() : flowConfig?.sessionId,
-                ...(this.overrideConfig ?? {}),
-                ...(arg.overrideConfig ?? {})
-            }
-        }
-
-        const options = {
+        const settings = this.settings
+        const overrideConfig = childOverrideConfig(
+            settings.overrideConfig,
+            settings.appliedParentVariables,
+            settings.startNewSession ? uuidv4() : flowConfig.sessionId
+        )
+        const streaming = Boolean(this.returnDirect && flowConfig.sseStreamer && flowConfig.chatId)
+        const requestSignal = signal ?? flowConfig.signal
+        if (requestSignal?.aborted) throw new Error('Vora Chatflow Tool call was aborted.')
+        const response = await secureFetch(`${settings.baseURL.replace(/\/+$/, '')}/api/v1/prediction/${settings.chatflowid}`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'flowise-tool': 'true',
-                ...this.headers
+                ...(streaming ? { 'flowise-tool-stream': 'true' } : {}),
+                ...settings.headers
             },
-            body: JSON.stringify(body)
-        }
-
-        const code = `
-const fetch = require('node-fetch');
-const url = $apiURL;
-
-const body = $callBody;
-
-const options = $callOptions;
-
-try {
-	const response = await fetch(url, options);
-	const resp = await response.json();
-	return resp.text;
-} catch (error) {
-	console.error(error);
-	return '';
-}
-`
-
-        // Create additional sandbox variables
-        const additionalSandbox: ICommonObject = {
-            $callOptions: options,
-            $callBody: body,
-            $apiURL: `${this.baseURL}/api/v1/prediction/${this.chatflowid}`
-        }
-
-        const sandbox = createCodeExecutionSandbox('', [], {}, additionalSandbox)
-
-        let response = await executeJavaScriptCode(code, sandbox, {
-            useSandbox: false
+            signal: requestSignal as RequestInit['signal'],
+            body: JSON.stringify({
+                question: settings.input || arg.input,
+                chatId: uuidv4(),
+                streaming,
+                overrideConfig
+            })
         })
-
-        if (typeof response === 'object') {
-            response = JSON.stringify(response)
-        }
-
-        return response
+        let started = false
+        return readChildPrediction(response, {
+            onUsedTools: (tools) => {
+                flowConfig.usedTools = tools
+            },
+            onToken: streaming
+                ? (token) => {
+                      if (!started) {
+                          flowConfig.sseStreamer!.streamStartEvent(flowConfig.chatId!, '')
+                          started = true
+                      }
+                      flowConfig.streamed = true
+                      flowConfig.sseStreamer!.streamTokenEvent(flowConfig.chatId!, token)
+                  }
+                : undefined
+        })
     }
 }
 
-module.exports = { nodeClass: ChatflowTool_Tools }
+module.exports = { nodeClass: VoraChatflowTool_Tools }

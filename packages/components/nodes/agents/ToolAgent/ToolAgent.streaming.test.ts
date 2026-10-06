@@ -6,6 +6,7 @@ import { awaitAllCallbacks } from '@langchain/core/callbacks/promises'
 import { DynamicTool } from '@langchain/core/tools'
 import { IServerSideEventStreamer } from '../../../src/Interface'
 import { AgentExecutor, ARTIFACTS_PREFIX, SOURCE_DOCUMENTS_PREFIX } from '../../../src/agents'
+import { markTransparentTool } from '../../../src/transparentTool'
 
 const { nodeClass: ToolAgent } = require('./ToolAgent')
 const { nodeClass: ConversationalAgent } = require('../ConversationalAgent/ConversationalAgent')
@@ -139,6 +140,96 @@ function fixture({
 }
 
 describe('ToolAgent direct result streaming and persistence', () => {
+    it.each([true, false])('hides a Vora wrapper while keeping direct output and child quota records, streaming=%s', async (streaming) => {
+        const f = fixture({ order: [HWP], streaming })
+        markTransparentTool(f.hwp)
+        const child = { tool: 'child_music', toolInput: { query: 'jazz' }, toolOutput: 'QUOTA_EXHAUSTED:child_music' }
+        jest.spyOn(f.hwp, 'call').mockImplementation(async (...args: any[]) => {
+            args[3].usedTools = [child]
+            return CARD
+        })
+        const result = await f.run()
+        expect(result.text).toBe(CARD)
+        expect(f.text()).toBe(streaming ? CARD : '')
+        expect(result.usedTools).toEqual([{ ...child, streamed: true }])
+        expect(f.memory.addChatMessages).toHaveBeenCalledWith(expect.arrayContaining([{ text: CARD, type: 'apiMessage' }]), 'session-1')
+        if (streaming) expect(f.events.find((e) => e.event === 'usedTools')?.data).toEqual(result.usedTools)
+    })
+
+    it('keeps the direct-return receipt even when the child uses no tools', async () => {
+        const f = fixture({ order: [HWP] })
+        markTransparentTool(f.hwp)
+        const result = await f.run()
+        expect(result).toBe(CARD)
+        expect(f.text()).toBe(CARD)
+        expect(f.events.find((e) => e.event === 'usedTools')?.data).toEqual([])
+    })
+
+    it('uses instance identity, not the user-chosen wrapper name', async () => {
+        const f = fixture({ order: [HWP] })
+        f.hwp.name = 'arbitrary_hub_label'
+        markTransparentTool(f.hwp)
+        f.model.responses[0] = toolCall([f.hwp.name])
+        expect(await f.run()).toBe(CARD)
+        expect(f.text()).toBe(CARD)
+        expect(f.events.find((e) => e.event === 'usedTools')?.data).toEqual([])
+    })
+
+    it('keeps future parent tools and child tools after the parent tool set changes', async () => {
+        const f = fixture({ order: [HWP] })
+        markTransparentTool(f.hwp)
+        const newTool = new DynamicTool({ name: 'future_parent_tool', description: 'New tool', func: async () => 'new result' })
+        // Remove the former parent SEARCH, then add a completely unrelated new tool.
+        f.data.inputs.tools = [f.hwp, newTool]
+        f.model.responses[0] = toolCall(['future_parent_tool', HWP])
+        jest.spyOn(f.hwp, 'call').mockImplementation(async (...args: any[]) => {
+            args[3].usedTools = [{ tool: SEARCH, toolInput: {}, toolOutput: 'child search' }]
+            return CARD
+        })
+        const result = await f.run()
+        expect(result.usedTools.map((t: any) => t.tool).sort()).toEqual([SEARCH, 'future_parent_tool'].sort())
+        expect(f.text()).toBe(CARD)
+        expect(f.model.generated).toBe(1)
+    })
+
+    it('preserves received child usage on a failed wrapper call, without exposing the wrapper', async () => {
+        const f = fixture({ order: [HWP] })
+        markTransparentTool(f.hwp)
+        jest.spyOn(f.hwp, 'call').mockImplementation(async (...args: any[]) => {
+            args[3].usedTools = [{ tool: 'actual_child', toolInput: {}, toolOutput: 'completed before failure' }]
+            throw new Error('Child prediction failed')
+        })
+        const result = await f.run()
+        expect(result.text).toBe('Child prediction failed')
+        expect(f.text()).toBe('Child prediction failed')
+        expect(result.usedTools.map((t: any) => t.tool)).toEqual(['actual_child'])
+    })
+
+    it('does not present an interrupted child stream as a completed answer or replay its partial text', async () => {
+        const f = fixture({ order: [HWP] })
+        markTransparentTool(f.hwp)
+        jest.spyOn(f.hwp, 'call').mockImplementation(async (...args: any[]) => {
+            const flow = args[3]
+            flow.sseStreamer.streamTokenEvent(flow.chatId, 'partial child answer')
+            flow.streamed = true
+            throw new Error('Child stream ended before completion')
+        })
+        const result = await f.run()
+        expect(result).toBe('Child stream ended before completion')
+        expect(f.text()).toBe('partial child answer\n\nChild stream ended before completion')
+        expect(f.events.find((e) => e.event === 'usedTools')?.data).toEqual([])
+    })
+
+    it('lets the parent compose a final answer when the wrapper is not direct', async () => {
+        const f = fixture({ order: [HWP] })
+        markTransparentTool(f.hwp)
+        f.hwp.returnDirect = false
+        const result = await f.run()
+        expect(result).toBe(FINAL)
+        expect(f.text()).toBe(FINAL)
+        expect(f.model.generated).toBe(2)
+    })
+
     it('emits the model-composed HWP card once after HWP + retrieval (production regression)', async () => {
         const f = fixture()
         const result = await f.run()

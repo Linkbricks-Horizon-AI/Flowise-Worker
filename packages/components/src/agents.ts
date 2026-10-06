@@ -31,9 +31,10 @@ import {
     StoppingMethod
 } from '@langchain/classic/agents'
 import { formatLogToString } from '@langchain/classic/agents/format_scratchpad/log'
-import { IUsedTool, IServerSideEventStreamer } from './Interface'
+import { IUsedTool, IServerSideEventStreamer, IToolFlowConfig } from './Interface'
 import { getErrorMessage } from './error'
 import { withDirectToolReturn } from './directToolReturn'
+import { isTransparentTool, publicToolUsage, recordToolUsage } from './transparentTool'
 
 export const SOURCE_DOCUMENTS_PREFIX = '\n\n----FLOWISE_SOURCE_DOCUMENTS----\n\n'
 export const ARTIFACTS_PREFIX = '\n\n----FLOWISE_ARTIFACTS----\n\n'
@@ -412,7 +413,7 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
             const { returnValues } = finishStep
             const additional = await this.agent.prepareForOutput(returnValues, steps)
             if (sourceDocuments.length) additional.sourceDocuments = flatten(sourceDocuments)
-            if (usedTools.length) additional.usedTools = usedTools
+            if (usedTools.length) additional.usedTools = publicToolUsage(usedTools)
             if (artifacts.length) additional.artifacts = flatten(artifacts)
             const output = this.returnIntermediateSteps
                 ? { ...returnValues, intermediateSteps: steps, ...additional }
@@ -476,6 +477,16 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                     await runManager?.handleAgentAction(action)
                     const tool = action.tool === '_Exception' ? new ExceptionTool() : toolsByName[action.tool?.toLowerCase()]
                     let observation
+                    // Per invocation, including failed calls. Child usage received before an
+                    // error must survive, without putting mutable results on a shared tool.
+                    const toolFlowConfig: IToolFlowConfig = {
+                        sessionId: this.sessionId,
+                        chatId: this.chatId,
+                        input: this.input,
+                        sseStreamer: this.sseStreamer,
+                        state: inputs,
+                        signal: config?.signal
+                    }
                     try {
                         /* Here we need to override Tool call method to include sessionId, chatId, input as parameter
                          * Tool Call Parameters:
@@ -489,13 +500,6 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                             // flowConfig.streamed = true when they stream their output live, so the
                             // bulk re-emit can be skipped — this is race-free even if the tool
                             // instance is shared across concurrent calls.
-                            const toolFlowConfig: any = {
-                                sessionId: this.sessionId,
-                                chatId: this.chatId,
-                                input: this.input,
-                                sseStreamer: this.sseStreamer,
-                                state: inputs
-                            }
                             observation = await (tool as any).call(
                                 this.isXML && typeof action.toolInput === 'string' ? { input: action.toolInput } : action.toolInput,
                                 runManager?.getChild(),
@@ -519,26 +523,17 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                                     console.error('Error parsing tool input from tool')
                                 }
                             }
-                            usedTools.push({
-                                tool: tool.name,
-                                toolInput: toolInput ?? (action.toolInput as any),
-                                toolOutput,
-                                // Whether the tool streamed its output live (set on the call-scoped
-                                // flowConfig). Lets agent nodes skip the bulk re-emit for returnDirect
-                                // tools (e.g. ChatflowTool) that already forwarded their tokens.
-                                streamed: toolFlowConfig.streamed === true
-                            })
-                            // Merge the child chatflow's own usedTools (captured by ChatflowTool.streamChildPrediction
-                            // onto the call-scoped flowConfig) into the parent's usedTools, so the child's custom tool
-                            // chips (e.g. search_main) surface in the parent response. This reuses the existing
-                            // usedTools -> streamUsedToolsEvent -> persistence path unchanged. streamed:true marks
-                            // them already-handled so no agent re-emits a child's internal toolOutput as answer
-                            // tokens if a parent tool happens to share a child tool's name.
-                            if (Array.isArray(toolFlowConfig.usedTools) && toolFlowConfig.usedTools.length) {
-                                for (const childTool of toolFlowConfig.usedTools) {
-                                    usedTools.push({ ...childTool, streamed: true })
-                                }
-                            }
+                            usedTools.push(
+                                recordToolUsage(tool, {
+                                    tool: tool.name,
+                                    toolInput: toolInput ?? (action.toolInput as any),
+                                    toolOutput,
+                                    // Whether the tool streamed its output live (set on the call-scoped
+                                    // flowConfig). Lets agent nodes skip the bulk re-emit for returnDirect
+                                    // tools (e.g. ChatflowTool) that already forwarded their tokens.
+                                    streamed: toolFlowConfig.streamed === true
+                                })
+                            )
                         } else {
                             observation = `${action.tool} is not a valid tool, try another one.`
                         }
@@ -554,21 +549,39 @@ export class AgentExecutor extends BaseChain<ChainValues, AgentExecutorOutput> {
                                 throw e
                             }
                             observation = await new ExceptionTool().call(observation, runManager?.getChild())
-                            usedTools.push({
-                                tool: tool.name,
-                                toolInput: action.toolInput as any,
-                                toolOutput: '',
-                                error: getErrorMessage(e)
-                            })
+                            usedTools.push(
+                                recordToolUsage(tool, {
+                                    tool: tool.name,
+                                    toolInput: action.toolInput as any,
+                                    toolOutput: '',
+                                    error: getErrorMessage(e)
+                                })
+                            )
                             return { action, observation: observation ?? '' }
                         } else {
-                            usedTools.push({
-                                tool: tool.name,
-                                toolInput: action.toolInput as any,
-                                toolOutput: '',
-                                error: getErrorMessage(e)
-                            })
-                            return { action, observation: getErrorMessage(e) }
+                            const errorMessage = getErrorMessage(e)
+                            const transparent = isTransparentTool(tool)
+                            usedTools.push(
+                                recordToolUsage(tool, {
+                                    tool: tool.name,
+                                    toolInput: action.toolInput as any,
+                                    // A failed transparent direct call still needs a visible failure
+                                    // notice. Do not replay partial child text or hide the failure
+                                    // behind its already-streamed flag. Ordinary tools stay unchanged.
+                                    toolOutput: transparent ? `${toolFlowConfig.streamed ? '\n\n' : ''}${errorMessage}` : '',
+                                    error: errorMessage,
+                                    ...(toolFlowConfig.streamed && !transparent ? { streamed: true } : {})
+                                })
+                            )
+                            return { action, observation: errorMessage }
+                        }
+                    } finally {
+                        // Keep the child's public usage even on failure. These records are
+                        // accounting data, never additional answer tokens to replay.
+                        if (Array.isArray(toolFlowConfig.usedTools)) {
+                            for (const childTool of toolFlowConfig.usedTools) {
+                                usedTools.push({ ...childTool, streamed: true })
+                            }
                         }
                     }
                     if (typeof observation === 'string' && observation.includes(SOURCE_DOCUMENTS_PREFIX)) {

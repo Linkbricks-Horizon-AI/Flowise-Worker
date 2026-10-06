@@ -149,6 +149,7 @@ export interface INodeProperties {
 
 export interface INode extends INodeProperties {
     credential?: INodeParams
+    skipCredentialIconRegistration?: boolean
     inputs?: INodeParams[]
     output?: INodeOutputsValue[]
     loadMethods?: {
@@ -196,6 +197,17 @@ export interface IUsedTool {
     // with returnDirect forwarding a child chatflow's tokens). Used to suppress the bulk
     // post-hoc emit in agent nodes so the answer is not sent twice.
     streamed?: boolean
+}
+
+export interface IToolFlowConfig {
+    sessionId?: string
+    chatId?: string
+    input?: string
+    sseStreamer?: IServerSideEventStreamer
+    state?: ICommonObject
+    signal?: AbortSignal
+    streamed?: boolean
+    usedTools?: IUsedTool[]
 }
 
 export interface IMultiAgentNode {
