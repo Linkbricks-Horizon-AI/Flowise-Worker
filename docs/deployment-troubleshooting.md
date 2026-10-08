@@ -98,14 +98,53 @@ to `pnpm run start-worker`. Check for an existing Render Docker Command override
 upstream distribution. `docker/worker/Dockerfile` is the separate optional HTTP
 healthcheck worker variant.
 
-Deploy Worker first, confirm its Redis connection, then deploy Web. Web readiness is
-`/api/v1/ping`. Verify an existing Vora flow, streaming, cancellation and file upload
+Deploy Worker first, confirm its Redis connection, then deploy Web. Set the Render
+Health Check Path to `/api/v1/ready`; `/api/v1/ping` remains the compatibility liveness endpoint.
+Verify an existing Vora flow, streaming, cancellation and file upload
 against the production service. Render environment variables, secrets and deployment
 settings remain managed in the Dashboard. Deployments in this release are performed
 manually by the owner.
 
 For every future update, follow [the paired update procedure](reviews/2026-10-09-node24-integration.md)
 and run the source parity check before pushing both repositories.
+
+## `ERR_ERL_PERMISSIVE_TRUST_PROXY` and service restarts
+
+The former default `trust proxy: true` trusted every address in `X-Forwarded-For`.
+`express-rate-limit` logs `ERR_ERL_PERMISSIVE_TRUST_PROXY` for that setting because
+a client could change its rate-limit identity by supplying the leading address.
+
+The server now uses the following policy:
+
+- Unset or blank `TRUST_PROXY`: use `NUMBER_OF_PROXIES` if present, otherwise trust
+  only the nearest proxy (`1`).
+- Legacy `TRUST_PROXY=true`: also trust one proxy; it no longer enables unlimited trust.
+- An explicit non-negative integer: trust that many hops. `false` or `0` disables proxy trust.
+- Explicit proxy IP/CIDR lists and Express subnet names remain supported.
+- `TRUST_PROXY` takes precedence over `NUMBER_OF_PROXIES`.
+
+Existing Render deployments without either variable receive the bounded default
+without an environment change. One hop is a starting point, not a verified count
+for every custom domain or CDN path. Check the existing `/api/v1/ip`
+endpoint against your public client IP through each supported ingress path. Set
+an explicit count or trusted proxy address list when the topology requires it;
+avoid increasing the count beyond the shortest path. See the
+[Express proxy guide](https://expressjs.com/en/guide/behind-proxies/) and
+[rate-limit proxy troubleshooting guide](https://express-rate-limit.mintlify.app/guides/troubleshooting-proxy-issues).
+
+The limiter's validation error is logged and caught by express-rate-limit 6.11.2;
+it does not itself exit the process. `ELIFECYCLE` reports that the command ended,
+not why it ended. The CLI now logs `Received SIGTERM` or `Received SIGINT` before
+graceful shutdown, without changing shutdown behavior.
+
+Keep the Web Health Check Path at `/api/v1/ready`. This endpoint runs before
+authentication and rate limiting, and returns 200 after initialization or 503
+when not ready. Render restarts a running instance after 60 seconds of failing
+health checks, but matching timing alone does not prove that was the cause.
+If shutdown continues, correlate Render Events, the instance/deploy ID, exit
+status and the signal/error immediately before shutdown. Check for failed health
+checks, deploy replacement, restarts or resource limits in the platform events.
+See [Render health checks](https://render.com/docs/health-checks).
 
 ## Startup warnings from `run-script-os` on Node 24
 
