@@ -109,7 +109,8 @@ export const defaultThemeConfig = {
     },
     disclaimer: {
         title: 'Disclaimer',
-        message: 'By using this chatbot, you need to request to the <a target="_blank" href="https://www.horizonai.ai/contact">Terms & Condition</a>',
+        message:
+            'By using this chatbot, you need to request to the <a target="_blank" href="https://www.horizonai.ai/contact">Terms & Condition</a>',
         textColor: 'black',
         buttonColor: '#3b82f6',
         buttonText: 'Start Chatting',

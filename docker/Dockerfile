@@ -1,31 +1,45 @@
-# Stage 1: Build stage
-FROM node:20-alpine AS build
+# Build this fork from the repository root context, including all custom packages.
+# Build local monorepo image
+# docker build --no-cache -t  flowise .
 
-USER root
+# Run image
+# docker run -d -p 3000:3000 flowise
 
-# Skip downloading Chrome for Puppeteer (saves build time)
+ARG NODE_VERSION=24.21.0
+FROM node:${NODE_VERSION}-bookworm-slim
+
+# ONNX ships glibc binaries; Debian avoids Alpine/musl loader failures.
+# Cairo/Pango also support a source-build fallback for Canvas.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates python3 make g++ pkg-config \
+        libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+        chromium curl git && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g pnpm@10.26.0
+
+ENV HUSKY=0
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install latest Flowise globally (specific version can be set: flowise@1.0.0)
-RUN npm install -g flowise
+ENV NODE_OPTIONS=--max-old-space-size=8192
 
-# Stage 2: Runtime stage
-FROM node:20-alpine
+WORKDIR /usr/src/flowise
 
-# Install runtime dependencies
-RUN apk add --no-cache chromium git python3 py3-pip make g++ build-base cairo-dev pango-dev curl
+# Copy app source
+COPY . .
 
-# Set the environment variable for Puppeteer to find Chromium
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Install dependencies and build (excluding sdk packages not needed for Docker)
+RUN pnpm install --frozen-lockfile && \
+    pnpm build:docker --concurrency=1 && \
+    node scripts/check-runtime-dependencies.cjs
 
-# Copy Flowise from the build stage
-COPY --from=build /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=build /usr/local/bin /usr/local/bin
+# Give the node user ownership of the application files
+RUN chown -R node:node .
 
-# Give the node user ownership of the installed package (node:*-alpine already has this user)
-RUN chown -R node:node /usr/local/lib/node_modules /usr/local/bin
-
-# Switch to non-root user
+# Switch to non-root user (node user already exists in node:24-bookworm-slim)
 USER node
 
-ENTRYPOINT ["flowise", "start"]
+EXPOSE 3000
+
+CMD [ "pnpm", "start" ]

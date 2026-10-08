@@ -1,14 +1,11 @@
 packages:
     - 'packages/*'
 
-# pnpm 10.26+ reads the build-script allowlist from here (no longer from package.json's
-# `pnpm` field) and enforces stricter security for git-hosted dependencies. These packages
-# run native/prepare build scripts and must be allowlisted, otherwise `pnpm install` fails
-# with ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED (flowise-embed) or skips required native builds.
+# pnpm 10.26 validates package names or exact versions here, not tarball URLs.
+# The custom embed source is pinned by commit in packages/ui/package.json.
 onlyBuiltDependencies:
     - faiss-node
     - sqlite3
     - flowise-embed
-    # pnpm 10.26+ matches git-hosted deps by their resolved tarball URL, not the bare name.
-    # Update the hash below if saxoji/FlowiseChatEmbed is bumped and the lockfile re-resolves.
-    - 'flowise-embed@https://codeload.github.com/saxoji/FlowiseChatEmbed/tar.gz/1404920a3c279b52bdafe97936d35f16ec61e752'
+    - canvas
+    - sharp

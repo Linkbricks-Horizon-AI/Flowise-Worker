@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { getErrorMessage } from '../../errors/utils'
 import { MODE } from '../../Interface'
 import chatMessagesService from '../../services/chat-messages'
+import { resolveTransportKey } from '../../utils/relayConfig'
 import { finalizeSseResponse } from '../../queue/finalizeSseResponse'
 
 // Send input message and get prediction result (External)
@@ -56,7 +57,7 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
             }
         }
         if (isDomainAllowed) {
-            const streamable = await chatflowsService.checkIfChatflowIsValidForStreaming(req.params.id)
+            const streamable = await chatflowsService.checkIfChatflowIsValidForStreaming(req.params.id, chatflow)
             const isStreamingRequested = req.body.streaming === 'true' || req.body.streaming === true
             if (streamable?.isStreaming && isStreamingRequested) {
                 const sseStreamer = getRunningExpressApp().sseStreamer
@@ -66,18 +67,28 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                     chatId = req.body.chatId ?? req.body.overrideConfig?.sessionId ?? uuidv4()
                     req.body.chatId = chatId
                 }
+                // Transport key (channel/SSE-slot/abort). relayExecutionId when the feature is on —
+                // per-execution isolation so overlapping calls of the same chatId don't share transport;
+                // else the chatId itself (legacy). The semantic chatId (below, in metadata/persistence)
+                // is never the transport key.
+                const { transportKey, relayExecutionId } = resolveTransportKey(chatId)
                 const isQueueMode = process.env.MODE === MODE.QUEUE
                 try {
-                    sseStreamer.addExternalClient(chatId, res)
+                    sseStreamer.addExternalClient(transportKey, res)
                     // If the API client disconnects before the stream finishes, abort the in-flight
                     // job so the worker stops instead of running to completion (wasted compute/LLM
-                    // spend) and this request stops awaiting. Reuses the exact same path as an
-                    // explicit user abort. The writableEnded guard means a normal completion — which
-                    // also emits 'close' after res.end() in the finally below — never triggers an abort.
+                    // spend) and this request stops awaiting. When relay-scoped, abort ONLY this
+                    // execution (relayExecutionId) so a superseded fetch / closed tab doesn't kill a
+                    // concurrent execution of the same conversation; else fall back to chat-scope abort.
+                    // The writableEnded guard means a normal completion — which also emits 'close' after
+                    // res.end() in the finally below — never triggers an abort.
                     res.on('close', () => {
                         if (res.writableEnded || !chatId) return
-                        chatMessagesService.abortChatMessage(chatId, req.params.id).catch((err) => {
-                            logger.warn(`[server]: abort on client disconnect failed for ${chatId}: ${getErrorMessage(err)}`)
+                        const abortPromise = relayExecutionId
+                            ? chatMessagesService.abortExecution(relayExecutionId)
+                            : chatMessagesService.abortChatMessage(chatId, req.params.id)
+                        abortPromise.catch((err) => {
+                            logger.warn(`[server]: abort on client disconnect failed for ${transportKey}: ${getErrorMessage(err)}`)
                         })
                     })
                     res.setHeader('Content-Type', 'text/event-stream')
@@ -87,25 +98,28 @@ const createPrediction = async (req: Request, res: Response, next: NextFunction)
                     res.flushHeaders()
 
                     if (isQueueMode) {
-                        await getRunningExpressApp().redisSubscriber.subscribe(chatId)
+                        await getRunningExpressApp().redisSubscriber.subscribe(transportKey)
                     }
 
-                    const apiResponse = await predictionsServices.buildChatflow(req)
-                    sseStreamer.streamMetadataEvent(apiResponse.chatId, apiResponse)
+                    const apiResponse = await predictionsServices.buildChatflow(req, undefined, relayExecutionId, chatflow)
+                    // Metadata slot key MUST be the transport key (not apiResponse.chatId) or the final
+                    // metadata frame (chatMessageId/followUpPrompts/action) lands in the wrong slot and
+                    // is silently dropped. The payload still carries the semantic apiResponse.chatId.
+                    sseStreamer.streamMetadataEvent(transportKey, apiResponse)
                 } catch (error) {
-                    if (chatId) {
-                        sseStreamer.streamErrorEvent(chatId, getErrorMessage(error))
+                    if (transportKey) {
+                        sseStreamer.streamErrorEvent(transportKey, getErrorMessage(error))
                     }
                     next(error)
                 } finally {
                     finalizeSseResponse({
-                        transportKey: chatId,
+                        transportKey,
                         sseStreamer,
                         redisSubscriber: isQueueMode ? getRunningExpressApp().redisSubscriber : undefined
                     })
                 }
             } else {
-                const apiResponse = await predictionsServices.buildChatflow(req)
+                const apiResponse = await predictionsServices.buildChatflow(req, undefined, undefined, chatflow)
                 return res.json(apiResponse)
             }
         } else {

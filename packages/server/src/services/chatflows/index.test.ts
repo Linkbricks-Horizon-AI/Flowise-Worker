@@ -593,3 +593,25 @@ describe('updateChatflow', () => {
         expect(mockDeleteScheduleForTarget).not.toHaveBeenCalled()
     })
 })
+
+describe('checkIfChatflowIsValidForStreaming', () => {
+    it('reuses a matching request-scoped ChatFlow without querying the repository', async () => {
+        const preloadedChatflow = makeChatflow({ id: 'flow-1', type: EnumChatflowType.AGENTFLOW })
+
+        const result = await chatflowsService.checkIfChatflowIsValidForStreaming('flow-1', preloadedChatflow as any)
+
+        expect(result).toEqual({ isStreaming: true })
+        expect(mockAppServer.AppDataSource.getRepository).not.toHaveBeenCalled()
+        expect(mockRepo.findOneBy).not.toHaveBeenCalled()
+    })
+
+    it('keeps the repository lookup for standalone callers', async () => {
+        const chatflow = makeChatflow({ id: 'flow-1', type: EnumChatflowType.AGENTFLOW })
+        mockRepo.findOneBy.mockResolvedValue(chatflow)
+
+        const result = await chatflowsService.checkIfChatflowIsValidForStreaming('flow-1')
+
+        expect(result).toEqual({ isStreaming: true })
+        expect(mockRepo.findOneBy).toHaveBeenCalledWith({ id: 'flow-1' })
+    })
+})

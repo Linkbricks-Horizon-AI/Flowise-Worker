@@ -16,10 +16,10 @@ describe('finalizeSseResponse', () => {
             })
         }
 
-        finalizeSseResponse({ transportKey: 'chat-1', sseStreamer, redisSubscriber })
+        finalizeSseResponse({ transportKey: 'relay-1', sseStreamer, redisSubscriber })
 
         expect(order).toEqual(['end', 'unsubscribe'])
-        expect(sseStreamer.removeClient).toHaveBeenCalledWith('chat-1')
+        expect(sseStreamer.removeClient).toHaveBeenCalledWith('relay-1')
     })
 
     test('does not require Redis cleanup outside queue mode', () => {
@@ -34,9 +34,9 @@ describe('finalizeSseResponse', () => {
         const sseStreamer = { removeClient: jest.fn() }
         const redisSubscriber = { unsubscribe: jest.fn().mockRejectedValue(new Error('Redis unavailable')) }
 
-        finalizeSseResponse({ transportKey: 'chat-2', sseStreamer, redisSubscriber })
+        finalizeSseResponse({ transportKey: 'relay-2', sseStreamer, redisSubscriber })
         await new Promise((resolve) => setImmediate(resolve))
 
-        expect(sseStreamer.removeClient).toHaveBeenCalledWith('chat-2')
+        expect(sseStreamer.removeClient).toHaveBeenCalledWith('relay-2')
     })
 })
