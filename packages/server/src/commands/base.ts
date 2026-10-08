@@ -181,10 +181,11 @@ export abstract class BaseCommand extends Command {
         // Overridden method by child class
     }
 
-    protected onTerminate() {
+    protected onTerminate(signal: NodeJS.Signals) {
         return async () => {
             if (this.terminating) return
             this.terminating = true
+            logger.info(`Received ${signal}; shutting down Flowise`)
 
             const configuredTimeout = parseInt(process.env.GRACEFUL_SHUTDOWN_TIMEOUT_MS || '', 10)
             const shutdownTimeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : 30000
@@ -217,8 +218,8 @@ export abstract class BaseCommand extends Command {
     async init(): Promise<void> {
         await super.init()
 
-        process.on('SIGTERM', this.onTerminate())
-        process.on('SIGINT', this.onTerminate())
+        process.on('SIGTERM', this.onTerminate('SIGTERM'))
+        process.on('SIGINT', this.onTerminate('SIGINT'))
 
         // Prevent throw new Error from crashing the app
         // TODO: Get rid of this and send proper error message to ui
