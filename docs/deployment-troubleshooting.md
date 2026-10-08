@@ -107,6 +107,31 @@ manually by the owner.
 For every future update, follow [the paired update procedure](reviews/2026-10-09-node24-integration.md)
 and run the source parity check before pushing both repositories.
 
+## Startup warnings from `run-script-os` on Node 24
+
+The former startup wrapper launched npm using `spawn` with arguments and
+`shell: true`. Node 24 reported `DEP0190`, and the nested npm process reported
+pnpm-specific `.npmrc` and environment settings as unknown configuration. These
+messages alone are warnings, not evidence that the server failed to start.
+
+The root and server package scripts now invoke the existing CLI through Node
+directly, retaining the `packages/server/bin` working directory. Web, Worker,
+user administration and the development CLI no longer depend on `run-script-os`.
+The OS-specific script aliases remain available. Keep using `pnpm start` for
+Web and `pnpm run start-worker` for Worker; keep the pnpm `.npmrc` settings.
+
+To check command dispatch without starting a service:
+
+```bash
+pnpm start --help
+pnpm run start-worker --help
+pnpm run user --help
+```
+
+These commands should show the Flowise CLI help without `DEP0190` or npm's
+`Unknown env/project config` warnings. Check actual Web readiness at
+`/api/v1/ping` and Worker connection logs separately.
+
 ## Native module checks on Node 24
 
 The images use `node:24.21.0-bookworm-slim`. The previously used Alpine image could
