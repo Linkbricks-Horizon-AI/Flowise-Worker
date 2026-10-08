@@ -107,7 +107,7 @@ describe('relay token path — worker→web hop simulation', () => {
         // reaches the user even under skew — which is why the outage showed start/metadata/end but no token.
         const web = makeWeb(RELAY_ID)
         // Simulate the controller's direct metadata emit to its own slot:
-        ;(web as any) // no-op; documented — metadata is not a pub/sub event in this hop
+        web as any // no-op; documented — metadata is not a pub/sub event in this hop
         // Tokens (pub/sub) under skew:
         const oldWorker = new RedisEventPublisher()
         const published = captureWorkerPublishes(oldWorker)

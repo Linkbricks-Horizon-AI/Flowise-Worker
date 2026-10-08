@@ -25,13 +25,7 @@ export const getRateLimiterKey = (req: Request): string => {
 interface CustomListener extends QueueEventsListener {
     // NOTE: BullMQ serializes event payloads to strings over Redis streams,
     // so bySessionId may arrive as a string at runtime; normalize on receive.
-    updateRateLimiter: (args: {
-        limitDuration: number
-        limitMax: number
-        limitMsg: string
-        id: string
-        bySessionId?: boolean
-    }) => void
+    updateRateLimiter: (args: { limitDuration: number; limitMax: number; limitMsg: string; id: string; bySessionId?: boolean }) => void
 }
 
 const QUEUE_NAME = 'ratelimit'

@@ -1,0 +1,24 @@
+{
+    "upstream": "https://github.com/FlowiseAI/Flowise.git",
+    "upstreamCommit": "9291856d1ea4a4ceea9f8fef8ce14f4f6c81e8eb",
+    "node": "24.21.0",
+    "pnpm": "10.26.0",
+    "preservedForkBehavior": [
+        "Vora chat models, child-flow tools, overrides, and custom embed commit",
+        "Direct tool return, sanitized progress, relay channels, abort isolation, and resilient queue completion",
+        "Read-only SQL validation, existing SSO identity binding, and lazy AccountService import",
+        "Cloud registration, invitation, billing controls, and fork branding",
+        "Public embed abort route and Basic Auth for the queue dashboard"
+    ],
+    "integrationDecisions": [
+        "Exclude upstream Cloud shutdown restrictions and sunset UI",
+        "Keep the public embed abort contract instead of requiring editor RBAC",
+        "Add upstream dashboard rate limiting while retaining the fork Basic Auth contract",
+        "Bound protobufjs and Elasticsearch transport upgrades to compatible majors",
+        "Preserve the custom xlsx tarball and Groq SDK override",
+        "Use the CommonJS-compatible patched @tootallnate/once 2.0.1 instead of the upstream global 3.x override",
+        "Use Canvas 3.2.0 and Debian/glibc so Canvas and the existing ONNX runtime load on Node 24",
+        "Unify Sharp at 0.33.5 to prevent a reproduced native crash when loading the old and new versions together"
+    ],
+    "containerBase": "node:24.21.0-bookworm-slim"
+}

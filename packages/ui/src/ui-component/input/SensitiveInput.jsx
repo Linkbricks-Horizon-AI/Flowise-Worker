@@ -20,7 +20,8 @@ export const SensitiveInput = ({ inputParam, value, onChange, disabled = false, 
     const isMultilinePassword = !!inputParam?.rows && inputParam?.type === 'password'
     const isMaskedUrl = isUrl && typeof myValue === 'string' && myValue.includes(MASKED_CHARS)
     const isRedactedMultiline = isMultilinePassword && myValue === REDACTED_CREDENTIAL_VALUE
-    const isHiddenRevealedMultiline = isMultilinePassword && !isVisible && !!onReveal && myValue !== REDACTED_CREDENTIAL_VALUE && myValue !== ''
+    const isHiddenRevealedMultiline =
+        isMultilinePassword && !isVisible && !!onReveal && myValue !== REDACTED_CREDENTIAL_VALUE && myValue !== ''
     const isRevealable = !!onReveal && (isPassword || isUrl)
 
     const handleToggle = async () => {

@@ -8,3 +8,9 @@ build
 
 packages/server/.env
 packages/ui/.env
+
+.git
+.graft
+graft
+.turbo
+**/coverage

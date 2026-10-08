@@ -1,3 +1,4 @@
+import PropTypes from 'prop-types'
 import { useEffect, useRef, useState } from 'react'
 
 // API
@@ -32,6 +33,13 @@ const FlowiseFullPageChat = ({ chatflowid, apiHost, chatflowConfig, theme }) => 
     }, [initialized, chatflowid, apiHost, chatflowConfig, theme])
 
     return <flowise-fullchatbot ref={ref} style={{ width: '100%', height: '100%' }} />
+}
+
+FlowiseFullPageChat.propTypes = {
+    chatflowid: PropTypes.string,
+    apiHost: PropTypes.string,
+    chatflowConfig: PropTypes.object,
+    theme: PropTypes.object
 }
 
 // ==============================|| Chatbot ||============================== //

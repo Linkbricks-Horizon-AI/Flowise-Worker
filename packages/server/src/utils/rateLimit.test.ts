@@ -1,7 +1,6 @@
 const mockRateLimit = jest.fn((_opts: unknown) => (_req: unknown, _res: unknown, next: () => void) => next())
 jest.mock('express-rate-limit', () => ({
     __esModule: true,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rateLimit: (opts: any) => mockRateLimit(opts)
 }))
 
@@ -35,9 +34,7 @@ describe('getRateLimiterKey', () => {
     // NOTE: construct the Request directly here — makeReq's default `ip` param
     // would swallow an explicit `undefined`, so it cannot exercise the IP-absent path.
     it('falls back to socket.remoteAddress when ip is undefined', () => {
-        expect(
-            getRateLimiterKey({ body: {}, ip: undefined, socket: { remoteAddress: '5.6.7.8' } } as unknown as Request)
-        ).toBe('5.6.7.8')
+        expect(getRateLimiterKey({ body: {}, ip: undefined, socket: { remoteAddress: '5.6.7.8' } } as unknown as Request)).toBe('5.6.7.8')
     })
 
     it('falls back to "unknown" when neither ip nor remoteAddress is set', () => {
@@ -48,7 +45,6 @@ describe('getRateLimiterKey', () => {
 describe('addRateLimiter keyGenerator wiring', () => {
     beforeEach(() => mockRateLimit.mockClear())
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lastOptions = (): Record<string, unknown> =>
         (mockRateLimit.mock.calls as any[][])[mockRateLimit.mock.calls.length - 1][0] as Record<string, unknown>
 

@@ -6,14 +6,14 @@ sync across the source repo and the deploy forks.
 ## Deploy topology
 
 ```
-github.com/saxoji/Flowise                         ← source (develop here)
-  └─ fork → Linkbricks-Horizon-AI/Flowise          ← Render service: MAIN web server
-              └─ fork → Linkbricks-Horizon-AI/Flowise-Worker ← Render service: WORKER
+FlowiseAI/Flowise                               ← upstream reference
+  └─ Linkbricks-Horizon-AI/Flowise               ← integration source / Render MAIN
+       └─ Linkbricks-Horizon-AI/Flowise-Worker   ← synchronized source / Render WORKER
 ```
 
 - Runtime is **QUEUE mode**: web + worker + PostgreSQL + Redis/Valkey (Singapore region).
-- **Render builds the two Linkbricks forks, not `saxoji/Flowise`.** A fix must be merged/pushed
-  into the deploy forks to actually deploy; pushing to `saxoji` alone does nothing for Render.
+- Changes from any other development fork must first be integrated into both Linkbricks
+  repositories. The 2026-10-09 integration uses those two repositories as its release pair.
 - A **failed Docker build does not take down the running service** — Render keeps the previous
   version live until a new build succeeds. So a broken build is safe to iterate on.
 
@@ -42,51 +42,41 @@ ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED  Failed to prepare git-hosted package fetch
 - Only reproduces on a **cold pnpm store** (a fresh Docker build). A warm local store skips the
   `prepare` step and hides the failure.
 
-### Key findings (validated with a cold-store reproduction)
+### Current fix — Node 24.21.0 / pnpm 10.26.0 (2026-10-09)
 
-1. A **bare package name** (`flowise-embed`) does **not** satisfy the gate for git deps — the
-   resolved **tarball URL** form is required.
-2. `package.json`'s `pnpm.onlyBuiltDependencies` **shadows** `pnpm-workspace.yaml`'s
-   `onlyBuiltDependencies` (precedence). Adding the URL form only to the workspace file is
-   ignored while the package.json name-form entry remains.
-3. pnpm **self-enforces `engines.pnpm` regardless of `engine-strict`**
-   (`ERR_PNPM_UNSUPPORTED_ENGINE`). Pinning below `engines.pnpm` requires relaxing that field.
+The earlier incident used pnpm 10.34.3 and was temporarily mitigated by pinning
+10.25.0. Its tarball-URL allowlist workaround is **not valid in pnpm 10.26.0**:
+that version rejects the URL with `ERR_PNPM_INVALID_VERSION_UNION`.
 
-### Fix applied (Option A — pin to a pre-gate pnpm; current state)
+The current configuration was verified with a cache-free Linux amd64 Docker build:
 
-1. **Dockerfile:** `npm install -g pnpm@10.25.0` (last release before the 10.26 gate).
-2. **package.json:** `engines.pnpm` `^10.26.0` → `>=10.21.0` (so the 10.25.0 pin is accepted).
-
-Why this option: hash-free (no per-commit maintenance), restores the pre-incident behavior, and
-changing the Dockerfile line busts the Docker layer cache to force a clean rebuild. Applied to
-all three repos.
-
-### Alternative (Option B — stay on modern pnpm ≥ 10.26)
-
-1. **Remove** `onlyBuiltDependencies` from `package.json` (keep `overrides`).
-2. In `pnpm-workspace.yaml`, allowlist the git dep by its **resolved tarball URL**:
+1. Pin Node to `24.21.0` and pnpm to `10.26.0` in Docker, CI and the root manifest.
+2. Keep `onlyBuiltDependencies` exclusively in `pnpm-workspace.yaml`:
    ```yaml
    onlyBuiltDependencies:
        - faiss-node
        - sqlite3
-       - 'flowise-embed@https://codeload.github.com/saxoji/FlowiseChatEmbed/tar.gz/<hash>'
+       - flowise-embed
+       - canvas
+       - sharp
    ```
-3. Keep the Dockerfile pinned to a `>=10.26 <11` version (e.g. `pnpm@10.34.3`) so `engines.pnpm`
-   stays satisfied and the version is deterministic.
+3. Pin `flowise-embed` to the existing custom Git commit
+   `1404920a3c279b52bdafe97936d35f16ec61e752` in `packages/ui/package.json` and
+   commit the matching `pnpm-lock.yaml`.
+4. Install using `pnpm install --frozen-lockfile`. `HUSKY=0` disables development
+   Git hook installation in the container; the embed prepare/build still runs.
 
-> ⚠️ `<hash>` must match `pnpm-lock.yaml`. When `saxoji/FlowiseChatEmbed` is bumped and the
-> lockfile re-resolves, this hash changes — update the allowlist or the build breaks again.
+Do not copy allowlist syntax between pnpm releases without a fresh-store test.
+Do not reintroduce a second allowlist in root `package.json`.
 
 ### Reproduce / validate locally
 
-The gate only fires on a cold store, so force one:
+Run from the repository root. The image build installs the pinned workspace,
+including the custom embed, without a prepopulated pnpm store:
 
 ```bash
-mkdir -p /tmp/embed-repro && cd /tmp/embed-repro
-printf '{"name":"r","version":"1.0.0","dependencies":{"flowise-embed":"github:saxoji/FlowiseChatEmbed"}}' > package.json
-printf 'packages: []\n' > pnpm-workspace.yaml
-npx -y pnpm@10.34.3 install --no-frozen-lockfile --store-dir /tmp/coldstore   # reproduces the gate
-npx -y pnpm@10.25.0 install --no-frozen-lockfile --store-dir /tmp/coldstore2  # passes (no gate)
+docker build --platform linux/amd64 --no-cache -t flowise-review .
+node scripts/check-worker-sync.mjs /path/to/Flowise /path/to/Flowise-Worker
 ```
 
 ---
@@ -95,7 +85,44 @@ npx -y pnpm@10.25.0 install --no-frozen-lockfile --store-dir /tmp/coldstore2  # 
 
 - **Always pin pnpm** in the Dockerfile (never unpinned `npm install -g pnpm`) to avoid silent
   version drift that re-triggers gates like the one above.
-- If you intentionally upgrade pnpm past 10.26 later, switch to **Option B** and remember the
-  tarball-URL hash maintenance.
+- Revalidate allowlist behavior and native modules before changing the pinned pnpm version.
 - This troubleshooting file should be kept identical in `saxoji/Flowise`,
   `Linkbricks-Horizon-AI/Flowise`, and `Linkbricks-Horizon-AI/Flowise-Worker`.
+
+## Manual Render release
+
+Use repository root as Docker build context and `Dockerfile` as the Dockerfile path
+for each repository. The Web image defaults to `pnpm start`; the Worker image defaults
+to `pnpm run start-worker`. Check for an existing Render Docker Command override.
+`docker/Dockerfile` also builds this fork from source; it no longer installs the npm
+upstream distribution. `docker/worker/Dockerfile` is the separate optional HTTP
+healthcheck worker variant.
+
+Deploy Worker first, confirm its Redis connection, then deploy Web. Web readiness is
+`/api/v1/ping`. Verify an existing Vora flow, streaming, cancellation and file upload
+against the production service. Render environment variables, secrets and deployment
+settings remain managed in the Dashboard. Deployments in this release are performed
+manually by the owner.
+
+For every future update, follow [the paired update procedure](reviews/2026-10-09-node24-integration.md)
+and run the source parity check before pushing both repositories.
+
+## Native module checks on Node 24
+
+The images use `node:24.21.0-bookworm-slim`. The previously used Alpine image could
+start the server while its ONNX dependency aborted when loaded. Debian/glibc
+supports the existing ONNX binary. Canvas is pinned to 3.2.0 and its install script
+is explicitly allowed. Sharp is unified at 0.33.5: loading its former 0.32.6 and 0.33.5
+native libraries in one process reproduced `munmap_chunk(): invalid pointer`. Canvas 2.x was present without a usable native binary.
+
+Every image build runs `node scripts/check-runtime-dependencies.cjs` after the
+application build. It checks SQLite queries, FAISS search, Canvas PNG generation,
+shared Sharp decoding, Transformers image resizing, ONNX native loading/tensors and the proxy event dependency. A
+failure prevents that image from being published or deployed. An ONNX tensor check
+does not replace model-specific inference validation.
+
+The upstream global `@tootallnate/once@3.0.1` override is replaced with the patched
+CommonJS-compatible `2.0.1`. This preserves the security correction without forcing
+an ESM dependency into older proxy clients and Jest 29. See the
+[maintainer advisory](https://github.com/advisories/GHSA-vpq2-c234-7xj6) and
+[Canvas Node 24 fix](https://github.com/Automattic/node-canvas/releases/tag/v3.2.0).

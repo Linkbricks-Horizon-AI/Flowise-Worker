@@ -198,7 +198,7 @@ class ChatVoraRouter2_ChatModels extends ChatOpenRouter_ChatModels implements IN
         const cache = nodeData.inputs?.cache as BaseCache
         const allowImageUploads = nodeData.inputs?.allowImageUploads as boolean
         const roundRobinSessionId = (options?.sessionId as string) || (options?.chatId as string)
-        const roundRobinScope = [((options?.chatflowid as string) || (options?.chatflowId as string)), nodeData.id].filter(Boolean).join(':')
+        const roundRobinScope = [(options?.chatflowid as string) || (options?.chatflowId as string), nodeData.id].filter(Boolean).join(':')
 
         const credentialData = await getCredentialData(nodeData.credential ?? '', options)
         const openRouterApiKey = getCredentialParam('openRouterApiKey', credentialData, nodeData)

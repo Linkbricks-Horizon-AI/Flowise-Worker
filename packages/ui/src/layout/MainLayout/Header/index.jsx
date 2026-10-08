@@ -250,11 +250,7 @@ const Header = ({ handleLeftDrawerToggle }) => {
                     </ButtonBase>
                 )}
             </Box>
-            {isCloud || isOpenSource ? (
-                <Box sx={{ flexGrow: 1 }} />
-            ) : (
-                <Box sx={{ flexGrow: 1 }} />
-            )}
+            {isCloud || isOpenSource ? <Box sx={{ flexGrow: 1 }} /> : <Box sx={{ flexGrow: 1 }} />}
             {isEnterpriseLicensed && isAuthenticated && <WorkspaceSwitcher />}
             {isCloud && isAuthenticated && <OrgWorkspaceBreadcrumbs />}
             {isCloud && currentUser?.isOrganizationAdmin && (

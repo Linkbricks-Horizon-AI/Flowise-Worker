@@ -7,8 +7,7 @@ describe('RedisEventPublisher.withChannel — relay-scoped transport', () => {
     it('publishes on the relay channel and preserves the semantic chatId in the payload', () => {
         const publisher = new RedisEventPublisher()
         const calls: Array<{ relayId: string; envelope: Record<string, any> }> = []
-        ;(publisher as any).publishOnRelayChannel = (relayId: string, envelope: Record<string, any>) =>
-            calls.push({ relayId, envelope })
+        ;(publisher as any).publishOnRelayChannel = (relayId: string, envelope: Record<string, any>) => calls.push({ relayId, envelope })
 
         const relay = publisher.withChannel('relay-xyz') as any
         relay.streamTokenEvent('conv-semantic', 'hello')
@@ -25,8 +24,7 @@ describe('RedisEventPublisher.withChannel — relay-scoped transport', () => {
     it('metadata event keeps semantic chatId/sessionId inside the payload, not the relay id', () => {
         const publisher = new RedisEventPublisher()
         const calls: Array<{ relayId: string; envelope: Record<string, any> }> = []
-        ;(publisher as any).publishOnRelayChannel = (relayId: string, envelope: Record<string, any>) =>
-            calls.push({ relayId, envelope })
+        ;(publisher as any).publishOnRelayChannel = (relayId: string, envelope: Record<string, any>) => calls.push({ relayId, envelope })
 
         const relay = publisher.withChannel('relay-xyz') as any
         relay.streamMetadataEvent('conv-semantic', {
@@ -51,7 +49,6 @@ describe('RedisEventPublisher.withChannel — relay-scoped transport', () => {
         ;(publisher as any).safePublish = async (channel: string, message: string) => {
             published.push({ channel, message })
         }
-
         ;(publisher as any).publishOnRelayChannel('relay-xyz', { chatId: 'conv-semantic', eventType: 'token', data: 'x' })
 
         expect(published).toHaveLength(1)

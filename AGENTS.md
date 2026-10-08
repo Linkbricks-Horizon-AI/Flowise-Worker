@@ -6,7 +6,7 @@ Flowise is a pnpm/Turbo monorepo. Core packages live in `packages/`: `server` is
 
 ## Build, Test, and Development Commands
 
-- `pnpm install`: install workspace dependencies. Use Node `^20` and pnpm `^10.26.0`.
+- `pnpm install`: install workspace dependencies. Use Node `^24` and pnpm `10.26.0`.
 - `pnpm build`: run `turbo run build` across packages.
 - `pnpm dev`: run package dev tasks in parallel; configure `.env` files in `packages/ui` and `packages/server` first.
 - `pnpm start`: start the built Flowise server via `packages/server/bin`.
@@ -29,3 +29,11 @@ Git history uses concise, Conventional-style subjects such as `fix: ...`, `chore
 ## Security & Configuration Tips
 
 Do not commit `.env` files or secrets. In credential definitions under `packages/components/credentials/`, secret values must use `type: 'password'` or `type: 'url'`, not `type: 'string'`, so the server can redact them correctly.
+
+## Fork Update and Worker Synchronization
+
+- Preserve Vora nodes, custom embed, streaming/abort contracts, SQL checks, and queue recovery when integrating upstream updates. Record deliberate upstream exceptions in `.upstream-sync.json`.
+- Use the Node version in `.nvmrc` and the exact pnpm version in `packageManager`. Regenerate the lockfile only for intended dependency changes; verify a fresh frozen install and Linux Docker build.
+- Apply shared changes to both Linkbricks Flowise repositories. Before pushing, run `node scripts/check-worker-sync.mjs <Flowise path> <Flowise-Worker path>` and the relevant tests in both repositories. The root Docker CMD is the only runtime-source exception.
+- The root Dockerfiles are the Render build entrypoints. Keep all Docker paths building this fork from source.
+- Render deployments are performed manually by the user. Git push does not constitute a verified Render deployment; report local validation separately from the user's deployment results.

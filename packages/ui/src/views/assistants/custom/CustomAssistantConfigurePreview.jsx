@@ -77,6 +77,13 @@ const FlowiseFullPageChat = ({ chatflowid, apiHost, chatflowConfig, theme }) => 
     return <flowise-fullchatbot ref={ref} style={{ width: '100%', height: '100%' }} />
 }
 
+FlowiseFullPageChat.propTypes = {
+    chatflowid: PropTypes.string,
+    apiHost: PropTypes.string,
+    chatflowConfig: PropTypes.object,
+    theme: PropTypes.object
+}
+
 // ===========================|| CustomAssistantConfigurePreview ||=========================== //
 
 const MemoizedFullPageChat = memo(
