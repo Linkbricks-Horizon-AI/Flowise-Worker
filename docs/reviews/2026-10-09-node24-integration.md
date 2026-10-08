@@ -20,6 +20,8 @@
   native load abort와 설치 스크립트 미실행 Canvas 문제를 함께 해결한다.
 - Sharp 0.32.6/0.33.5 동시 로드 시 재현한 native abort를 해결하기 위해 0.33.5로
   통일하고 Transformers의 이미지 변환 API도 함께 검증한다.
+- 간접 설치되던 Node 18 타입 대신 components에 `@types/node ^24.19.1`을 명시하고
+  표준 라이브러리 선언을 ES2022로 맞췄다. JavaScript 출력 target은 유지했다.
 - 각 Docker 빌드에 네이티브 실행 검사를 포함해 설치 성공과 실제 로드를 구별한다.
 - `docker/Dockerfile`도 npm 원본 배포본 대신 현재 수정본 소스를 빌드한다.
 - Worker의 완료 로그는 공통 BaseQueue에 보존했다. 두 저장소는 root Dockerfile의
@@ -29,7 +31,54 @@
 
 ## 검증 결과
 
-최종 이미지 검증 후 결과를 아래에 기록한다.
+Node 24.21.0 / pnpm 10.26.0 / Linux amd64 기준 결과다.
+
+| 검증 | 결과 |
+| --- | --- |
+| 전체 Jest | **190 suites / 3,864 tests 통과**, 실패 0 |
+| components | 35 suites / 1,138 tests 통과 |
+| server | 54 suites / 1,061 tests 통과 |
+| agentflow | 73 suites / 1,255 tests 통과 |
+| observe | 25 suites / 335 tests 통과 |
+| UI | 3 suites / 75 tests 통과 |
+| 별도 Worker 환경의 server + components | **89 suites / 2,199 tests 통과** |
+| 전체 빌드 | SDK 포함 6개 package 성공 |
+| lint | 오류 0, 기존 경고 8개. 마지막 manifest/tsconfig 수정도 개별 검사 통과 |
+| Web / Worker 공통 파일 | **2,477개 일치**, root Docker CMD만 허용된 차이 |
+| 배포 이미지의 고정 설치 및 빌드 | 양쪽 모두 새 pnpm store에서 frozen install, 배포용 4개 package 빌드와 native 검사 통과 |
+| native 실행 | SQLite 쿼리, FAISS 검색, Canvas PNG, 공통 Sharp 디코딩, ONNX Tensor, Transformers resize, 이벤트 promise 통과 |
+| 실제 Web–Worker 연동 | PostgreSQL/Redis 연결, 로그인, 큐 작업 반환, BullMQ completed 전환 로그 확인 |
+| 관리자 화면 | 미인증 401, 정상 Basic Auth 200, 연속 101개 요청 중 100개 200 / 1개 429 |
+| 시스템 Chromium | Puppeteer로 7,087바이트 PDF 생성 성공 |
+
+실행한 주요 명령:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm lint
+pnpm exec turbo run build --concurrency=1
+pnpm exec turbo run test --concurrency=1 -- --runInBand
+pnpm exec turbo run test --filter=flowise --filter=flowise-components --concurrency=1 -- --runInBand
+node scripts/check-runtime-dependencies.cjs
+node scripts/check-worker-sync.mjs /path/to/Flowise /path/to/Flowise-Worker
+docker build --platform linux/amd64 -t flowise-review .
+```
+
+초기 Alpine 이미지의 캐시 없는 빌드만으로는 발견되지 않았던 native 실패를
+직접 로드 검사에서 찾아 Debian/Canvas/Sharp 설정을 보정했다. 최종 Debian
+이미지의 pnpm 설치 역시 기존 store 없이 수행했다.
+
+커스텀 핵심 경로 18개 중 17개는 기준선과 byte 단위로 일치한다. VoraRouter2는
+Prettier 포맷만 변경됐고 정규화 비교로 확인했다. 마지막 타입 수정 전후의 실제
+서버·컴포넌트 JavaScript 출력 1,172개도 동일하다. 연동 검증한 이미지와 최종 타입
+설정의 실행 코드가 일치함을 아래 aggregate SHA-256으로 확인했다.
+
+- components JS 543개: `f1ffb543df993a06a33a31439f3d7a1dd6d653a39cc563666b58b3e8e981dd56`
+- server JS 629개: `f1c84d47be242487bdcdb6ede0948ae8869e1c8983b548dc2bc9e593853705d3`
+
+테스트 로그, 이미지 빌드 로그 및 로컬 원본 설정 백업은 작업 시점의
+`/private/tmp/flowise-upgrade-20261009-frrgs_4j/`에 저장했다. 이 경로는 임시
+검증 산출물이며 저장소에 비밀값이나 운영 DB 자료를 추가하지 않았다.
 
 ## 이후 업데이트의 완료 조건
 
