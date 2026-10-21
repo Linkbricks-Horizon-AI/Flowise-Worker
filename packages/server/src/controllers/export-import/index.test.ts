@@ -5,12 +5,20 @@ jest.mock('../../services/export-import', () => ({
     __esModule: true,
     default: { convertExportInput: jest.fn((body) => body), exportData: jest.fn() }
 }))
-jest.mock('../../services/export-import/download', () => ({ createExportDownload: jest.fn() }))
+jest.mock('../../services/export-import/download', () => ({
+    createExportDownload: jest.fn(),
+    ExportDownloadError: class extends Error {
+        constructor(public section: string, public phase: string, public cause: unknown) {
+            super(`Workspace export failed in ${section} (${phase})`)
+        }
+    }
+}))
 jest.mock('../../utils/logger', () => ({ __esModule: true, default: { error: jest.fn() } }))
 
 import controller from './index'
 import exportImportService from '../../services/export-import'
-import { createExportDownload } from '../../services/export-import/download'
+import { createExportDownload, ExportDownloadError } from '../../services/export-import/download'
+import logger from '../../utils/logger'
 
 const app = (workspaceId: string | undefined = 'workspace-1') => {
     const server = express()
@@ -52,6 +60,20 @@ describe('workspace export controller', () => {
         expect(createExportDownload).not.toHaveBeenCalled()
     })
 
+    it.each(['gzip', 'identity'])('preserves the JSON backup with %s transfer encoding', async (encoding) => {
+        const backup = { ChatMessage: [{ content: '대용량 백업 😀'.repeat(10000) }] }
+        ;(createExportDownload as jest.Mock).mockReturnValue(
+            (async function* () {
+                yield JSON.stringify(backup)
+            })()
+        )
+        const response = await request(app()).post('/export?download=true').set('Accept-Encoding', encoding).send({ chat_message: true })
+        expect(response.status).toBe(200)
+        expect(response.headers['content-encoding']).toBe(encoding === 'gzip' ? 'gzip' : undefined)
+        expect(response.headers.vary).toContain('Accept-Encoding')
+        expect(response.body).toEqual(backup)
+    })
+
     it('rejects a missing workspace before starting a download', async () => {
         await request(app('')).post('/export?download=true').send({ chatflow: true }).expect(404)
         expect(createExportDownload).not.toHaveBeenCalled()
@@ -65,5 +87,31 @@ describe('workspace export controller', () => {
             })()
         )
         await expect(request(app()).post('/export?download=true').send({ chat_message: true })).rejects.toThrow()
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database unavailable'))
+    })
+
+    it('logs the failing section and driver code without SQL parameters or stored JSON', async () => {
+        const cause = Object.assign(new Error('connection terminated'), { code: 'ECONNRESET', parameters: ['private content'] })
+        ;(createExportDownload as jest.Mock).mockReturnValue(
+            (async function* () {
+                yield '{"ChatMessage":['
+                throw new ExportDownloadError('ChatMessage', 'read', cause)
+            })()
+        )
+        await expect(request(app()).post('/export?download=true').send({ chat_message: true })).rejects.toThrow()
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('section=ChatMessage phase=read code=ECONNRESET'))
+        expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('private content')
+    })
+
+    it('does not include malformed stored data in a serialization error log', async () => {
+        ;(createExportDownload as jest.Mock).mockReturnValue(
+            (async function* () {
+                yield '{"ChatFlow":['
+                throw new ExportDownloadError('ChatFlow', 'serialize', new SyntaxError('Unexpected token in private content'))
+            })()
+        )
+        await expect(request(app()).post('/export?download=true').send({ chatflow: true })).rejects.toThrow()
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Invalid stored JSON'))
+        expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('private content')
     })
 })

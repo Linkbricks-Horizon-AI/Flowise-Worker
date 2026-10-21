@@ -1,5 +1,5 @@
 import PropTypes from 'prop-types'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import { useNavigate } from 'react-router-dom'
@@ -53,6 +53,8 @@ import exportImportApi from '@/api/exportimport'
 import useApi from '@/hooks/useApi'
 import { useError } from '@/store/context/ErrorContext'
 import { getErrorMessage } from '@/utils/errorHandler'
+import { downloadExport } from '@/utils/downloadExport'
+import { formatBytes } from '@/utils/genericHelper'
 
 const dataToExport = [
     'Agentflows',
@@ -70,14 +72,17 @@ const dataToExport = [
     'Variables'
 ]
 
-const ExportDialog = ({ show, onCancel, onExport }) => {
+const ExportDialog = ({ show, onCancel, onExport, exportedBytes }) => {
     const portalElement = document.getElementById('portal')
 
-    const [selectedData, setSelectedData] = useState(dataToExport)
+    const [selectedData, setSelectedData] = useState(() => dataToExport.filter((data) => data !== 'Chat Messages'))
     const [isExporting, setIsExporting] = useState(false)
 
-    useEffect(() => {
-        if (show) setIsExporting(false)
+    useLayoutEffect(() => {
+        if (show) {
+            setIsExporting(false)
+            setSelectedData((data) => data.filter((item) => item !== 'Chat Messages'))
+        }
 
         return () => {
             setIsExporting(false)
@@ -143,11 +148,16 @@ const ExportDialog = ({ show, onCancel, onExport }) => {
                                 alt='ExportingGIF'
                             />
                             <span>Exporting data might takes a while</span>
+                            {exportedBytes > 0 && <span>{formatBytes(exportedBytes)} downloaded</span>}
                         </div>
                     </Box>
                 )}
             </DialogContent>
-            {!isExporting && (
+            {isExporting ? (
+                <DialogActions>
+                    <Button onClick={onCancel}>Cancel</Button>
+                </DialogActions>
+            ) : (
                 <DialogActions>
                     <Button onClick={onCancel}>Cancel</Button>
                     <Button
@@ -171,7 +181,8 @@ const ExportDialog = ({ show, onCancel, onExport }) => {
 ExportDialog.propTypes = {
     show: PropTypes.bool,
     onCancel: PropTypes.func,
-    onExport: PropTypes.func
+    onExport: PropTypes.func,
+    exportedBytes: PropTypes.number
 }
 
 const ImportDialog = ({ show }) => {
@@ -219,7 +230,11 @@ const ProfileSection = ({ handleLogout }) => {
     const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
 
     const [exportDialogOpen, setExportDialogOpen] = useState(false)
+    const [exportedBytes, setExportedBytes] = useState(0)
+    const exportController = useRef(null)
     const [importDialogOpen, setImportDialogOpen] = useState(false)
+
+    useEffect(() => () => exportController.current?.abort(), [])
 
     const anchorRef = useRef(null)
     const inputRef = useRef()
@@ -305,6 +320,10 @@ const ProfileSection = ({ handleLogout }) => {
     }
 
     const onExport = async (data) => {
+        if (exportController.current) return
+        const controller = new AbortController()
+        exportController.current = controller
+        setExportedBytes(0)
         const body = {}
         if (data.includes('Agentflows')) body.agentflow = true
         if (data.includes('Agentflows V2')) body.agentflowv2 = true
@@ -321,23 +340,14 @@ const ProfileSection = ({ handleLogout }) => {
         if (data.includes('Variables')) body.variable = true
 
         try {
-            const response = await exportImportApi.downloadData(body)
-            const dataUri = URL.createObjectURL(response.data)
-            const linkElement = document.createElement('a')
-            linkElement.href = dataUri
-            linkElement.download = 'ExportData.json'
-            document.body.appendChild(linkElement)
-            try {
-                linkElement.click()
-            } finally {
-                linkElement.remove()
-                setTimeout(() => URL.revokeObjectURL(dataUri), 60000)
-            }
+            await downloadExport(body, { signal: controller.signal, onProgress: setExportedBytes })
         } catch (error) {
+            if (controller.signal.aborted || error.name === 'AbortError' || error.code === 'ERR_CANCELED') return
             if ([401, 403, 429].includes(error.response?.status)) handleError(error)
             const message = error.response?.data?.message || getErrorMessage(error)
             errorFailed(`Failed to export: ${message}`)
         } finally {
+            exportController.current = null
             setExportDialogOpen(false)
         }
     }
@@ -517,7 +527,12 @@ const ProfileSection = ({ handleLogout }) => {
                 )}
             </Popper>
             <AboutDialog show={aboutDialogOpen} onCancel={() => setAboutDialogOpen(false)} />
-            <ExportDialog show={exportDialogOpen} onCancel={() => setExportDialogOpen(false)} onExport={(data) => onExport(data)} />
+            <ExportDialog
+                show={exportDialogOpen}
+                onCancel={() => (exportController.current ? exportController.current.abort() : setExportDialogOpen(false))}
+                onExport={onExport}
+                exportedBytes={exportedBytes}
+            />
             <ImportDialog show={importDialogOpen} />
         </>
     )

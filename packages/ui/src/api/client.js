@@ -24,6 +24,13 @@ apiClient.interceptors.response.use(
                 // Keep non-JSON errors intact (e.g. a proxy error page).
             }
         }
+        if (typeof ReadableStream !== 'undefined' && error.response?.data instanceof ReadableStream) {
+            try {
+                error.response.data = await new Response(error.response.data).json()
+            } catch {
+                error.response.data = { message: `Export request failed (${error.response.status})` }
+            }
+        }
         if (error.response?.status === 401) {
             // check if refresh is needed
             if (error.response.data.message === ErrorMessage.TOKEN_EXPIRED && error.response.data.retry === true) {

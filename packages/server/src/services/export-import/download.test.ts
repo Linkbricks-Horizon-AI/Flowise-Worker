@@ -21,7 +21,7 @@ jest.mock('../../utils/getRunningExpressApp', () => ({
 jest.mock('../marketplaces', () => ({ __esModule: true, default: { getAllCustomTemplates: jest.fn().mockResolvedValue([]) } }))
 
 import marketplacesService from '../marketplaces'
-import { createExportDownload, generateExportJson, readExportRows } from './download'
+import { createExportDownload, ExportDownloadError, generateExportJson, readExportRows } from './download'
 
 const collect = async (chunks: AsyncIterable<string>) => {
     let result = ''
@@ -122,5 +122,30 @@ describe('workspace export download', () => {
         query.getMany.mockRejectedValue(new Error('database unavailable'))
         const stream = readExportRows(query as SelectQueryBuilder<ObjectLiteral>)
         await expect(stream.next()).rejects.toThrow('database unavailable')
+    })
+
+    it('retains the section, phase and original cause when a later database page fails', async () => {
+        const cause = Object.assign(new Error('connection terminated'), { code: 'ECONNRESET' })
+        const records = async function* () {
+            yield { id: 'first', content: 'visible data' }
+            throw cause
+        }
+        await expect(collect(generateExportJson([{ name: 'ChatMessage', records }]))).rejects.toMatchObject({
+            name: 'ExportDownloadError',
+            section: 'ChatMessage',
+            phase: 'read',
+            cause
+        })
+    })
+
+    it('identifies serialization failures without including the stored record in the message', async () => {
+        try {
+            await collect(generateExportJson([{ name: 'ChatFlow', records: async () => [{ flowData: 'private invalid JSON' }] }]))
+            throw new Error('Expected serialization to fail')
+        } catch (error) {
+            expect(error).toBeInstanceOf(ExportDownloadError)
+            expect(error).toMatchObject({ section: 'ChatFlow', phase: 'serialize', cause: expect.any(SyntaxError) })
+            expect((error as Error).message).not.toContain('private invalid JSON')
+        }
     })
 })

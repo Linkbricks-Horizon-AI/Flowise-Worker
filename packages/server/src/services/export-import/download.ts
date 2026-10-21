@@ -21,6 +21,13 @@ export type ExportSection = {
     records: () => AsyncIterable<ObjectLiteral> | Promise<ObjectLiteral[]>
 }
 
+export class ExportDownloadError extends Error {
+    constructor(public section: string, public phase: 'read' | 'serialize', public cause: unknown) {
+        super(`Workspace export failed in ${section} (${phase})`)
+        this.name = 'ExportDownloadError'
+    }
+}
+
 // A stable ID cursor avoids loading the entire history or counting all rows on every page.
 export async function* readExportRows(query: SelectQueryBuilder<ObjectLiteral>): AsyncGenerator<ObjectLiteral> {
     let cursor: string | undefined
@@ -40,10 +47,17 @@ export async function* generateExportJson(sections: ExportSection[]): AsyncGener
         const section = sections[index]
         yield `${index ? ',' : ''}\n${JSON.stringify(section.name)}:[`
         let first = true
-        for await (const record of await section.records()) {
-            const serialized = JSON.stringify(sanitizeExportRecord(section.name, record))
-            yield `${first ? '' : ','}\n${serialized}`
-            first = false
+        let phase: 'read' | 'serialize' = 'read'
+        try {
+            for await (const record of await section.records()) {
+                phase = 'serialize'
+                const serialized = JSON.stringify(sanitizeExportRecord(section.name, record))
+                yield `${first ? '' : ','}\n${serialized}`
+                first = false
+                phase = 'read'
+            }
+        } catch (error) {
+            throw new ExportDownloadError(section.name, phase, error)
         }
         yield '\n]'
     }

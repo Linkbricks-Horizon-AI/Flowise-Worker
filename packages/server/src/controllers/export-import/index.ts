@@ -2,9 +2,10 @@ import { NextFunction, Request, Response } from 'express'
 import { StatusCodes } from 'http-status-codes'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
+import { constants, createGzip } from 'zlib'
 import { InternalFlowiseError } from '../../errors/internalFlowiseError'
 import exportImportService from '../../services/export-import'
-import { createExportDownload } from '../../services/export-import/download'
+import { createExportDownload, ExportDownloadError } from '../../services/export-import/download'
 import logger from '../../utils/logger'
 
 const exportData = async (req: Request, res: Response, next: NextFunction) => {
@@ -22,14 +23,28 @@ const exportData = async (req: Request, res: Response, next: NextFunction) => {
             res.setHeader('Content-Type', 'application/json; charset=utf-8')
             res.setHeader('Content-Disposition', 'attachment; filename="ExportData.json"')
             res.setHeader('Cache-Control', 'no-store')
-            await pipeline(Readable.from(download), res)
+            res.vary('Accept-Encoding')
+            const source = Readable.from(download, { objectMode: false, highWaterMark: 64 * 1024 })
+            if (req.acceptsEncodings('gzip')) {
+                res.setHeader('Content-Encoding', 'gzip')
+                await pipeline(source, createGzip({ level: constants.Z_BEST_SPEED }), res)
+            } else {
+                await pipeline(source, res)
+            }
             return
         }
         const apiResponse = await exportImportService.exportData(input, workspaceId)
         return res.json(apiResponse)
     } catch (error) {
         if (res.headersSent || res.destroyed) {
-            logger.error('Workspace export download failed', { error })
+            const cause = error instanceof ExportDownloadError ? error.cause : error
+            const context = error instanceof ExportDownloadError ? ` section=${error.section} phase=${error.phase}` : ''
+            const code = cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : 'UNKNOWN'
+            // The logger's formatter drops nested error objects. Include the useful
+            // fields in the message, but never log stored JSON or SQL parameters.
+            const detail =
+                cause instanceof SyntaxError ? 'Invalid stored JSON' : cause instanceof Error ? cause.message : 'Unknown export error'
+            logger.error(`Workspace export download failed:${context} code=${code} ${detail.replace(/[\r\n]/g, ' ').slice(0, 300)}`)
             res.destroy(error instanceof Error ? error : new Error('Export failed'))
             return
         }
