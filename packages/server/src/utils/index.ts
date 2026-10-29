@@ -1103,6 +1103,12 @@ export const resolveVariables = async (
     variableOverrides: ICommonObject[] = []
 ): Promise<INodeData> => {
     let flowNodeData = cloneDeep(reactFlowNodeData)
+    // Request vars were permission-filtered into inputs by replaceInputsWithConfig.
+    // Resolve explicit $vars mappings against that request, not workspace defaults.
+    // getGlobalVariable checks variable grants again and must not mutate defaults
+    // reused by another node or request.
+    const variableFlowConfig = { ...flowConfig, vars: { ...flowConfig?.vars, ...flowNodeData.inputs?.vars } }
+    const requestVariables = cloneDeep(availableVariables)
 
     const getParamValues = async (paramsObj: ICommonObject) => {
         for (const key in paramsObj) {
@@ -1116,9 +1122,9 @@ export const resolveVariables = async (
                         question,
                         chatHistory,
                         undefined,
-                        flowConfig,
+                        variableFlowConfig,
                         uploadedFilesContent,
-                        availableVariables,
+                        requestVariables,
                         variableOverrides
                     )
                     resolvedInstances.push(resolvedInstance)
@@ -1132,9 +1138,9 @@ export const resolveVariables = async (
                     question,
                     chatHistory,
                     isAcceptVariable,
-                    flowConfig,
+                    variableFlowConfig,
                     uploadedFilesContent,
-                    availableVariables,
+                    requestVariables,
                     variableOverrides
                 )
                 paramsObj[key] = resolvedInstance

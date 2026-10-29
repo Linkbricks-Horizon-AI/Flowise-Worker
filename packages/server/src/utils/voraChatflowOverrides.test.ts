@@ -1,4 +1,4 @@
-import { getAPIOverrideConfig, replaceInputsWithConfig } from './index'
+import { getAPIOverrideConfig, replaceInputsWithConfig, resolveVariables } from './index'
 
 jest.mock('flowise-components', () => ({}))
 jest.mock('./logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }))
@@ -66,5 +66,61 @@ describe('Vora uses existing API override permissions and workflow-local IDs', (
             ])
             expect(result.inputs!.vars.tool_usage).toBe('{"same_code":0}')
         }
+    })
+})
+
+describe('request variables in explicit child workflow mappings', () => {
+    const grants = [
+        { id: 'context', name: 'vora_works_word_context_ref', type: 'static', enabled: true },
+        { id: 'locale', name: 'vora_tool_ui_language', type: 'static', enabled: true }
+    ]
+    const defaults = () =>
+        [
+            { name: 'vora_works_word_context_ref', type: 'static', value: 'workspace-default' },
+            { name: 'vora_tool_ui_language', type: 'static', value: 'en' },
+            { name: 'denied', type: 'static', value: 'workspace-policy' }
+        ] as any
+    const mappedNode = (vars: Record<string, string>) =>
+        ({
+            id: 'VoraChatflowTool_2',
+            name: 'VoraChatflowTool',
+            inputParams: [{ name: 'overrideConfig', acceptVariable: true }],
+            inputs: {
+                overrideConfig: JSON.stringify({
+                    vars: {
+                        vora_works_word_context_ref: '{{$vars.vora_works_word_context_ref}}',
+                        vora_tool_ui_language: '{{$vars.vora_tool_ui_language}}',
+                        denied: '{{$vars.denied}}',
+                        flowise_source_chatflow_id: '{{$flow.chatflowId}}'
+                    }
+                }),
+                vars
+            }
+        } as any)
+    const resolve = async (vars: Record<string, string>, available = defaults()) => {
+        const result = await resolveVariables(mappedNode(vars), [], 'request', [], { chatflowId: 'main' }, undefined, available, grants)
+        return JSON.parse(result.inputs!.overrideConfig).vars
+    }
+    it('uses permission-filtered request context and locale in the explicit child mapping', async () => {
+        const result = await resolve({ vora_works_word_context_ref: 'current-context', vora_tool_ui_language: 'ko' })
+        expect(result).toMatchObject({
+            vora_works_word_context_ref: 'current-context',
+            vora_tool_ui_language: 'ko',
+            flowise_source_chatflow_id: 'main'
+        })
+    })
+    it('does not override a variable without the current API grant', async () => {
+        expect((await resolve({ denied: 'attacker-value' })).denied).toBe('workspace-policy')
+    })
+    it('does not mutate reusable workspace defaults or carry context between requests', async () => {
+        const available = defaults()
+        await resolve({ vora_works_word_context_ref: 'first-context' }, available)
+        expect(available).toEqual(defaults())
+        const next = await resolve({ vora_works_word_context_ref: 'second-context' }, available)
+        expect(next.vora_works_word_context_ref).toBe('second-context')
+        expect((await resolve({}, available)).vora_works_word_context_ref).toBe('workspace-default')
+    })
+    it('preserves an allowed request variable without a workspace default', async () => {
+        expect((await resolve({ vora_works_word_context_ref: 'fresh-context' }, [])).vora_works_word_context_ref).toBe('fresh-context')
     })
 })
