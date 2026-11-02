@@ -4,7 +4,7 @@
 # Run image
 # docker run -d -p 3000:3000 flowise
 
-ARG NODE_VERSION=24.21.0
+ARG NODE_VERSION=24.22.2
 FROM node:${NODE_VERSION}-bookworm-slim
 
 # ONNX ships glibc binaries; Debian avoids Alpine/musl loader failures.
